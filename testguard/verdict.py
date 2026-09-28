@@ -31,6 +31,8 @@ def evaluate_changes(base_ref: str = "HEAD", cwd: str = ".") -> Report:
     collected_literals: set = set()
 
     for test_file in test_files:
+        if not test_file.endswith(".py"):
+            continue
         full_path = os.path.join(cwd, test_file)
         if not os.path.exists(full_path):
             base_content = get_file_content_at_ref(base_ref, test_file, cwd=cwd)
@@ -50,10 +52,15 @@ def evaluate_changes(base_ref: str = "HEAD", cwd: str = ".") -> Report:
         else:
             violations.extend(analyze_test_code(head_content, file_path=test_file))
 
-    # If no test files were changed in diff, collect literals from existing test files
-    if not test_files and src_files:
+    # When src_files are present, collect literals from all existing test files in repo
+    # to ensure untouched tests also protect modified source files
+    if src_files:
+        excluded_dirs = {
+            ".git", ".venv", "venv", "__pycache__", ".pytest_cache",
+            "node_modules", ".tox", "build", "dist", ".superpowers",
+        }
         for root, dirs, files in os.walk(cwd):
-            dirs[:] = [d for d in dirs if d not in (".git", ".venv", "venv", "__pycache__", ".pytest_cache")]
+            dirs[:] = [d for d in dirs if d not in excluded_dirs]
             for file in files:
                 rel_path = os.path.relpath(os.path.join(root, file), cwd).replace("\\", "/")
                 if is_test_file(rel_path) and file.endswith(".py"):

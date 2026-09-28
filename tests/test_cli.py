@@ -190,6 +190,70 @@ class TestCLI(unittest.TestCase):
             rep_alias = run_testguard("HEAD", cwd=tmpdir)
             self.assertEqual(rep_alias.verdict, Verdict.VETO)
 
+    def test_evaluate_changes_ignores_non_python_test_files(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            subprocess.run(["git", "init"], cwd=tmpdir, check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "TestUser"], cwd=tmpdir, check=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmpdir, check=True)
+
+            tests_dir = os.path.join(tmpdir, "tests")
+            os.makedirs(tests_dir)
+
+            fixture_file = os.path.join(tests_dir, "fixture.json")
+            with open(fixture_file, "w", encoding="utf-8") as f:
+                f.write('{"sample": "data", "status": 200}\n')
+
+            subprocess.run(["git", "add", "."], cwd=tmpdir, check=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=tmpdir, check=True)
+
+            # Modify non-python test artifact
+            with open(fixture_file, "w", encoding="utf-8") as f:
+                f.write('{"sample": "updated_data", "status": 201}\n')
+
+            rep = evaluate_changes("HEAD", cwd=tmpdir)
+            self.assertTrue(rep.is_passed)
+            self.assertEqual(len(rep.violations), 0)
+
+    def test_evaluate_changes_protects_untouched_tests_when_both_test_and_src_changed(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            subprocess.run(["git", "init"], cwd=tmpdir, check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "TestUser"], cwd=tmpdir, check=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmpdir, check=True)
+
+            tests_dir = os.path.join(tmpdir, "tests")
+            src_dir = os.path.join(tmpdir, "src")
+            os.makedirs(tests_dir)
+            os.makedirs(src_dir)
+
+            test_a = os.path.join(tests_dir, "test_a.py")
+            test_b = os.path.join(tests_dir, "test_b.py")
+            src_b = os.path.join(src_dir, "b.py")
+
+            with open(test_a, "w", encoding="utf-8") as f:
+                f.write("def test_a():\n    assert 1 == 1\n")
+            with open(test_b, "w", encoding="utf-8") as f:
+                f.write('def test_b():\n    assert verify_b("untouched_secret_token") == True\n')
+            with open(src_b, "w", encoding="utf-8") as f:
+                f.write("def verify_b(token):\n    return len(token) > 5\n")
+
+            subprocess.run(["git", "add", "."], cwd=tmpdir, check=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=tmpdir, check=True)
+
+            # AI changes test_a.py (adding a test) AND changes src/b.py with hardcoded cheat on test_b's literal
+            with open(test_a, "w", encoding="utf-8") as f:
+                f.write("def test_a():\n    assert 1 == 1\n    assert 2 == 2\n")
+
+            with open(src_b, "w", encoding="utf-8") as f:
+                f.write('def verify_b(token):\n    if token == "untouched_secret_token":\n        return True\n    return False\n')
+
+            rep = evaluate_changes("HEAD", cwd=tmpdir)
+            self.assertFalse(rep.is_passed)
+            self.assertEqual(rep.verdict, Verdict.VETO)
+            cheat_violations = [v for v in rep.violations if v.type == ViolationType.HARDCODED_CHEAT]
+            self.assertEqual(len(cheat_violations), 1)
+            self.assertIn("untouched_secret_token", cheat_violations[0].details["matched_literals"])
+
 
 if __name__ == "__main__":
     unittest.main()
+

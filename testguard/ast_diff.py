@@ -21,21 +21,44 @@ def _get_decorator_name(decorator: ast.AST) -> str:
     if isinstance(decorator, ast.Name):
         return decorator.id
     elif isinstance(decorator, ast.Attribute):
-        return decorator.attr
+        parent = _get_decorator_name(decorator.value)
+        return f"{parent}.{decorator.attr}" if parent else decorator.attr
     elif isinstance(decorator, ast.Call):
         return _get_decorator_name(decorator.func)
     return ""
 
 
-def _has_skip_decorator(func_node: FunctionNodeType) -> bool:
-    for decorator in func_node.decorator_list:
+def _has_skip_decorator(node: Union[ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef]) -> bool:
+    for decorator in node.decorator_list:
         dec_name = _get_decorator_name(decorator)
         if any(skip_word in dec_name.lower() for skip_word in ("skip", "skipif", "xfail")):
             return True
     return False
 
 
-def _find_swallowed_exceptions(func_node: FunctionNodeType, file_path: str) -> list[Violation]:
+def _has_raise_or_assertion(statements: list[ast.stmt]) -> bool:
+    for stmt in statements:
+        for node in ast.walk(stmt):
+            if isinstance(node, ast.Raise):
+                return True
+            if isinstance(node, ast.Assert):
+                return True
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Attribute) and (
+                    node.func.attr.startswith("assert") or node.func.attr == "fail"
+                ):
+                    return True
+                if isinstance(node.func, ast.Name) and (
+                    node.func.id.startswith("assert") or node.func.id == "fail"
+                ):
+                    return True
+    return False
+
+
+def _find_swallowed_exceptions(
+    func_node: FunctionNodeType, file_path: str, symbol_name: Optional[str] = None
+) -> list[Violation]:
+    sym = symbol_name or func_node.name
     violations: list[Violation] = []
     for node in ast.walk(func_node):
         if isinstance(node, ast.Try):
@@ -48,14 +71,27 @@ def _find_swallowed_exceptions(func_node: FunctionNodeType, file_path: str) -> l
                     and handler.body[0].value.value is Ellipsis
                 )
                 is_empty = len(handler.body) == 0
-                if is_pass_only or is_ellipsis or is_empty:
+                is_return = any(
+                    isinstance(stmt, ast.Return)
+                    and (
+                        stmt.value is None
+                        or (isinstance(stmt.value, ast.Constant) and stmt.value.value is None)
+                    )
+                    for stmt in handler.body
+                )
+                if (is_pass_only or is_ellipsis or is_empty or is_return) and not _has_raise_or_assertion(handler.body):
+                    msg = (
+                        f"Exception swallowed with return in test '{sym}'"
+                        if is_return
+                        else f"Exception swallowed with pass in test '{sym}'"
+                    )
                     violations.append(
                         Violation(
                             type=ViolationType.EXCEPTION_SWALLOWED,
                             file_path=file_path,
                             line_number=handler.lineno,
-                            symbol_name=func_node.name,
-                            message=f"Exception swallowed with pass in test '{func_node.name}'",
+                            symbol_name=sym,
+                            message=msg,
                         )
                     )
     return violations
@@ -63,14 +99,41 @@ def _find_swallowed_exceptions(func_node: FunctionNodeType, file_path: str) -> l
 
 def _extract_test_functions(tree: ast.AST) -> dict[str, FunctionNodeType]:
     functions: dict[str, FunctionNodeType] = {}
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+
+    class TestFuncVisitor(ast.NodeVisitor):
+        def __init__(self):
+            self.class_stack: list[str] = []
+
+        def visit_ClassDef(self, node: ast.ClassDef):
+            self.class_stack.append(node.name)
+            self.generic_visit(node)
+            self.class_stack.pop()
+
+        def visit_FunctionDef(self, node: ast.FunctionDef):
+            self._handle_function(node)
+            self.generic_visit(node)
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef):
+            self._handle_function(node)
+            self.generic_visit(node)
+
+        def _handle_function(self, node: FunctionNodeType):
             if node.name.startswith("test_") or node.name.endswith("_test"):
-                functions[node.name] = node
+                if self.class_stack:
+                    full_name = f"{'.'.join(self.class_stack)}.{node.name}"
+                else:
+                    full_name = node.name
+                functions[full_name] = node
+
+    visitor = TestFuncVisitor()
+    visitor.visit(tree)
     return functions
 
 
 def analyze_test_code(code: str, file_path: str) -> list[Violation]:
+    if file_path and not file_path.endswith(".py"):
+        return []
+
     try:
         tree = ast.parse(code, filename=file_path)
     except SyntaxError as e:
@@ -84,6 +147,21 @@ def analyze_test_code(code: str, file_path: str) -> list[Violation]:
         ]
 
     violations: list[Violation] = []
+
+    # Check class-level skip decorators
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            if _has_skip_decorator(node):
+                violations.append(
+                    Violation(
+                        type=ViolationType.TEST_SKIPPED,
+                        file_path=file_path,
+                        line_number=node.lineno,
+                        symbol_name=node.name,
+                        message=f"Test class '{node.name}' has skip decorator",
+                    )
+                )
+
     funcs = _extract_test_functions(tree)
 
     for func_name, func_node in funcs.items():
@@ -97,12 +175,15 @@ def analyze_test_code(code: str, file_path: str) -> list[Violation]:
                     message=f"Test '{func_name}' has skip decorator",
                 )
             )
-        violations.extend(_find_swallowed_exceptions(func_node, file_path))
+        violations.extend(_find_swallowed_exceptions(func_node, file_path, symbol_name=func_name))
 
     return violations
 
 
 def analyze_ast_diff(base_code: str, head_code: str, file_path: str) -> list[Violation]:
+    if file_path and not file_path.endswith(".py"):
+        return []
+
     violations = analyze_test_code(head_code, file_path)
 
     try:

@@ -144,5 +144,44 @@ def outer_service():
         self.assertEqual(len(violations), 1)
         self.assertEqual(violations[0].symbol_name, "inner_helper")
 
+    def test_detects_hardcoded_ternary_ifexp(self):
+        src_code = """
+def login(username):
+    return "session_xyz" if username == "admin_special_user" else perform_real_auth(username)
+"""
+        test_literals = {"admin_special_user", "session_xyz"}
+        violations = detect_hardcoded_cheats(src_code, test_literals, file_path="src/auth.py")
+        self.assertEqual(len(violations), 1)
+        self.assertEqual(violations[0].type, ViolationType.HARDCODED_CHEAT)
+        self.assertEqual(violations[0].symbol_name, "login")
+        self.assertIn("admin_special_user", violations[0].details["matched_literals"])
+
+    def test_detects_inverted_ternary_ifexp(self):
+        src_code = """
+def login(username):
+    return perform_real_auth(username) if username != "admin_special_user" else "session_xyz"
+"""
+        test_literals = {"admin_special_user", "session_xyz"}
+        violations = detect_hardcoded_cheats(src_code, test_literals, file_path="src/auth.py")
+        self.assertEqual(len(violations), 1)
+        self.assertEqual(violations[0].type, ViolationType.HARDCODED_CHEAT)
+        self.assertEqual(violations[0].symbol_name, "login")
+
+    def test_ignores_legitimate_dispatch_returning_call(self):
+        src_code = """
+def route_request(path, user):
+    if path == "/api/v1/admin":
+        return handle_admin_request(path, user)
+    return handle_standard_request(path, user)
+
+def route_ternary(path, user):
+    return handle_admin_request(path, user) if path == "/api/v1/admin" else handle_standard_request(path, user)
+"""
+        test_literals = {"/api/v1/admin"}
+        violations = detect_hardcoded_cheats(src_code, test_literals, file_path="src/router.py")
+        self.assertEqual(len(violations), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
+

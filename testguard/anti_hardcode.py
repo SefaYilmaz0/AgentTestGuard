@@ -47,17 +47,39 @@ def _extract_constants_from_expr(expr: ast.AST) -> set[Any]:
             constants.add(child.value)
     return constants
 
-def _has_return_in_body(body: list[ast.stmt]) -> bool:
+def _is_constant_or_literal(expr: Optional[ast.AST], test_literals: set[Any]) -> bool:
+    if expr is None:
+        return True
+    if isinstance(expr, ast.Constant):
+        return True
+    if isinstance(expr, ast.UnaryOp) and isinstance(expr.operand, ast.Constant):
+        return True
+    if isinstance(expr, (ast.List, ast.Tuple, ast.Set)):
+        return all(_is_constant_or_literal(elt, test_literals) for elt in expr.elts)
+    if isinstance(expr, ast.Dict):
+        keys_ok = all(_is_constant_or_literal(k, test_literals) for k in expr.keys if k is not None)
+        vals_ok = all(_is_constant_or_literal(v, test_literals) for v in expr.values)
+        return keys_ok and vals_ok
+    if isinstance(expr, (ast.Call, ast.Await)):
+        return False
+    constants = _extract_constants_from_expr(expr)
+    if constants.intersection(test_literals):
+        return True
+    return False
+
+def _has_hardcoded_return_in_body(body: list[ast.stmt], test_literals: set[Any]) -> bool:
     for stmt in body:
         if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         if isinstance(stmt, ast.Return):
-            return True
+            if _is_constant_or_literal(stmt.value, test_literals):
+                return True
         queue = [stmt]
         while queue:
             curr = queue.pop(0)
             if isinstance(curr, ast.Return):
-                return True
+                if _is_constant_or_literal(curr.value, test_literals):
+                    return True
             for child in ast.iter_child_nodes(curr):
                 if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     queue.append(child)
@@ -85,7 +107,27 @@ class _HardcodeCheatVisitor(ast.NodeVisitor):
     def visit_If(self, node: ast.If):
         cond_constants = _extract_constants_from_expr(node.test)
         matched_literals = cond_constants.intersection(self.test_literals)
-        if matched_literals and _has_return_in_body(node.body):
+        if matched_literals and _has_hardcoded_return_in_body(node.body, self.test_literals):
+            matched_sorted = sorted(list(matched_literals), key=str)
+            matched_str = ", ".join(repr(x) for x in matched_sorted)
+            func_name = self.current_function or "<module>"
+            self.violations.append(Violation(
+                type=ViolationType.HARDCODED_CHEAT,
+                file_path=self.file_path,
+                line_number=node.lineno,
+                symbol_name=func_name,
+                message=f"Hardcoded check for test literal(s) {matched_str} in '{func_name}'",
+                details={"matched_literals": matched_sorted}
+            ))
+        self.generic_visit(node)
+
+    def visit_IfExp(self, node: ast.IfExp):
+        cond_constants = _extract_constants_from_expr(node.test)
+        matched_literals = cond_constants.intersection(self.test_literals)
+        if matched_literals and (
+            _is_constant_or_literal(node.body, self.test_literals)
+            or _is_constant_or_literal(node.orelse, self.test_literals)
+        ):
             matched_sorted = sorted(list(matched_literals), key=str)
             matched_str = ", ".join(repr(x) for x in matched_sorted)
             func_name = self.current_function or "<module>"
@@ -110,7 +152,7 @@ class _HardcodeCheatVisitor(ast.NodeVisitor):
                     if isinstance(child, ast.Constant) and not isinstance(child.value, bool):
                         pattern_constants.add(child.value)
             matched_literals = pattern_constants.intersection(self.test_literals)
-            if matched_literals and _has_return_in_body(case.body):
+            if matched_literals and _has_hardcoded_return_in_body(case.body, self.test_literals):
                 matched_sorted = sorted(list(matched_literals), key=str)
                 matched_str = ", ".join(repr(x) for x in matched_sorted)
                 func_name = self.current_function or "<module>"

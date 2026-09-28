@@ -115,6 +115,97 @@ def test_one():
         violations = analyze_ast_diff(base_code, bad_head_code, file_path="tests/test_bad.py")
         self.assertTrue(any(v.type == ViolationType.SYNTAX_ERROR for v in violations))
 
+    def test_detects_class_level_skip_decorator(self):
+        code = """
+import unittest
+import pytest
+
+@unittest.skip("Skipping whole class")
+class TestLegacyFeature(unittest.TestCase):
+    def test_legacy(self):
+        self.assertTrue(True)
+
+@pytest.mark.skip(reason="Not ready")
+class TestNewFeature:
+    def test_new(self):
+        assert True
+"""
+        violations = analyze_test_code(code, file_path="tests/test_suite.py")
+        skip_violations = [v for v in violations if v.type == ViolationType.TEST_SKIPPED]
+        self.assertEqual(len(skip_violations), 2)
+        symbols = {v.symbol_name for v in skip_violations}
+        self.assertEqual(symbols, {"TestLegacyFeature", "TestNewFeature"})
+
+    def test_detects_swallowed_exception_with_return(self):
+        code = """
+def test_swallow_return():
+    try:
+        risky_call()
+    except Exception:
+        return
+
+def test_swallow_return_none():
+    try:
+        risky_call()
+    except Exception:
+        return None
+"""
+        violations = analyze_test_code(code, file_path="tests/test_swallow.py")
+        swallowed = [v for v in violations if v.type == ViolationType.EXCEPTION_SWALLOWED]
+        self.assertEqual(len(swallowed), 2)
+        symbols = {v.symbol_name for v in swallowed}
+        self.assertEqual(symbols, {"test_swallow_return", "test_swallow_return_none"})
+
+    def test_does_not_flag_exception_with_raise_or_assertion(self):
+        code = """
+def test_proper_handling():
+    try:
+        risky_call()
+    except ValueError:
+        raise
+    except KeyError:
+        assert False, "Key error should not occur"
+"""
+        violations = analyze_test_code(code, file_path="tests/test_ok.py")
+        swallowed = [v for v in violations if v.type == ViolationType.EXCEPTION_SWALLOWED]
+        self.assertEqual(len(swallowed), 0)
+
+    def test_class_scoped_test_function_names(self):
+        base_code = """
+class TestAuth:
+    def test_exec(self):
+        assert check_auth() == True
+        assert get_role() == "admin"
+
+class TestBilling:
+    def test_exec(self):
+        assert charge() == 100
+        assert verify_invoice() == True
+"""
+        # Cheating: AI removes assertion only in TestBilling.test_exec
+        head_code = """
+class TestAuth:
+    def test_exec(self):
+        assert check_auth() == True
+        assert get_role() == "admin"
+
+class TestBilling:
+    def test_exec(self):
+        assert charge() == 100
+"""
+        violations = analyze_ast_diff(base_code, head_code, file_path="tests/test_services.py")
+        self.assertEqual(len(violations), 1)
+        self.assertEqual(violations[0].type, ViolationType.ASSERTION_REMOVED)
+        self.assertEqual(violations[0].symbol_name, "TestBilling.test_exec")
+        self.assertEqual(violations[0].details["base_count"], 2)
+        self.assertEqual(violations[0].details["head_count"], 1)
+
+    def test_non_python_file_path_ignored(self):
+        json_code = '{"test": true, "key": "value"}'
+        self.assertEqual(analyze_test_code(json_code, file_path="tests/fixtures.json"), [])
+        self.assertEqual(analyze_ast_diff(json_code, json_code, file_path="tests/fixtures.json"), [])
+
 
 if __name__ == "__main__":
     unittest.main()
+
