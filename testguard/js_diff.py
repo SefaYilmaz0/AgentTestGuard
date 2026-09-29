@@ -195,6 +195,77 @@ def _find_matching_paren(tokens: list[JsToken], start_idx: int) -> int:
     return len(tokens)
 
 
+def _find_callback_body(toks: list[JsToken], open_paren_idx: int, close_paren_idx: int) -> Optional[list[JsToken]]:
+    """Locate the tokens of the callback body passed to a test or describe call.
+
+    Handles:
+    - Arrow functions with destructuring or options: test('name', async ({ page }) => { ... })
+    - Regular functions: test('name', function({ page }) { ... })
+    - Expression-body arrow functions: test('name', () => expect(1).toBe(1))
+    """
+    # 1. Look for arrow function '=>'
+    arrow_idx = None
+    for k in range(open_paren_idx + 1, close_paren_idx):
+        if toks[k].value == "=>":
+            arrow_idx = k
+            break
+
+    if arrow_idx is not None:
+        brace_start = None
+        for k in range(arrow_idx + 1, close_paren_idx):
+            if toks[k].value == "{":
+                brace_start = k
+                break
+
+        if brace_start is not None:
+            brace_end = _find_matching_brace(toks, brace_start)
+            return toks[brace_start + 1:brace_end]
+        else:
+            return toks[arrow_idx + 1:close_paren_idx]
+
+    # 2. Look for regular function 'function'
+    func_idx = None
+    for k in range(open_paren_idx + 1, close_paren_idx):
+        if toks[k].type == "IDENT" and toks[k].value == "function":
+            func_idx = k
+            break
+
+    if func_idx is not None:
+        param_open = None
+        for k in range(func_idx + 1, close_paren_idx):
+            if toks[k].value == "(":
+                param_open = k
+                break
+
+        search_start = func_idx + 1
+        if param_open is not None:
+            param_close = _find_matching_paren(toks, param_open)
+            search_start = param_close + 1
+
+        brace_start = None
+        for k in range(search_start, close_paren_idx):
+            if toks[k].value == "{":
+                brace_start = k
+                break
+
+        if brace_start is not None:
+            brace_end = _find_matching_brace(toks, brace_start)
+            return toks[brace_start + 1:brace_end]
+
+    # 3. Fallback: find any block '{ ... }'
+    brace_start = None
+    for k in range(open_paren_idx + 1, close_paren_idx):
+        if toks[k].value == "{":
+            brace_start = k
+            break
+
+    if brace_start is not None:
+        brace_end = _find_matching_brace(toks, brace_start)
+        return toks[brace_start + 1:brace_end]
+
+    return None
+
+
 def _parse_test_blocks(code: str) -> list[_JsTestBlock]:
     """Parse test suites and individual test cases, counting assertions within each block."""
     all_tokens = _tokenize(code)
@@ -220,35 +291,37 @@ def _parse_test_blocks(code: str) -> list[_JsTestBlock]:
             is_xskip = tok.value in XSKIP_KEYWORDS
 
             if is_skip_keyword or is_xskip:
-                target_kind = "describe" if "describe" in tok.value or "context" in tok.value or "suite" in tok.value else "test"
                 line_no = tok.line_no
 
-                # Check for .skip / .only modifier: e.g. it.skip(
+                # Collect method chain: e.g. test.describe, test.describe.skip, it.skip, test.only
                 curr = i + 1
-                if is_skip_keyword and curr + 1 < n and toks[curr].value == "." and toks[curr + 1].type == "IDENT":
+                chain = [tok.value]
+                while is_skip_keyword and curr + 1 < n and toks[curr].value == "." and toks[curr + 1].type == "IDENT":
+                    chain.append(toks[curr + 1].value)
                     curr += 2
+
+                is_describe_suite = (
+                    "describe" in chain
+                    or "context" in chain
+                    or "suite" in chain
+                    or tok.value == "xdescribe"
+                )
+                target_kind = "describe" if is_describe_suite else "test"
 
                 if curr < n and toks[curr].value == "(":
                     open_paren_idx = curr
                     close_paren_idx = _find_matching_paren(toks, open_paren_idx)
 
                     # Extract title from first string argument
-                    title = tok.value
+                    title = ".".join(chain)
                     arg_idx = open_paren_idx + 1
                     if arg_idx < close_paren_idx and toks[arg_idx].type in ("STRING_DOUBLE", "STRING_SINGLE", "STRING_TEMPLATE"):
                         title = _unquote_str(toks[arg_idx].value)
 
-                    # Find callback block '{'
-                    brace_start = None
-                    for b_idx in range(open_paren_idx + 1, close_paren_idx):
-                        if toks[b_idx].value == "{":
-                            brace_start = b_idx
-                            break
+                    # Locate callback body using _find_callback_body
+                    body_toks = _find_callback_body(toks, open_paren_idx, close_paren_idx)
 
-                    if brace_start is not None:
-                        brace_end = _find_matching_brace(toks, brace_start)
-                        body_toks = toks[brace_start + 1:brace_end]
-
+                    if body_toks is not None:
                         full_name = f"{' > '.join(suite_stack)} > {title}" if suite_stack else title
 
                         if target_kind == "describe":
@@ -263,7 +336,7 @@ def _parse_test_blocks(code: str) -> list[_JsTestBlock]:
                                 assertions_count=assertions,
                             ))
 
-                        i = brace_end + 1
+                        i = close_paren_idx + 1
                         continue
 
             i += 1
@@ -273,7 +346,7 @@ def _parse_test_blocks(code: str) -> list[_JsTestBlock]:
 
 
 def _detect_skips(tokens: list[JsToken], file_path: str) -> list[Violation]:
-    """Detect test.skip, it.skip, describe.skip, xit, xtest, xdescribe calls."""
+    """Detect test.skip, it.skip, describe.skip, test.describe.skip, xit, xtest, xdescribe calls."""
     violations: list[Violation] = []
     n = len(tokens)
     i = 0
@@ -286,11 +359,19 @@ def _detect_skips(tokens: list[JsToken], file_path: str) -> list[Violation]:
             continue
 
         if tok.value in SKIP_KEYWORDS:
-            # Check for .skip(
-            if i + 3 < n and tokens[i + 1].value == "." and tokens[i + 2].value == "skip" and tokens[i + 3].value == "(":
-                title = f"{tok.value}.skip"
-                arg_idx = i + 4
-                if arg_idx < n and tokens[arg_idx].type in ("STRING_DOUBLE", "STRING_SINGLE", "STRING_TEMPLATE"):
+            curr = i + 1
+            chain = [tok.value]
+            while curr + 1 < n and tokens[curr].value == "." and tokens[curr + 1].type == "IDENT":
+                chain.append(tokens[curr + 1].value)
+                curr += 2
+
+            if "skip" in chain and curr < n and tokens[curr].value == "(":
+                open_paren_idx = curr
+                close_paren_idx = _find_matching_paren(tokens, open_paren_idx)
+                call_repr = ".".join(chain)
+                title = call_repr
+                arg_idx = open_paren_idx + 1
+                if arg_idx < close_paren_idx and tokens[arg_idx].type in ("STRING_DOUBLE", "STRING_SINGLE", "STRING_TEMPLATE"):
                     title = _unquote_str(tokens[arg_idx].value)
 
                 violations.append(Violation(
@@ -298,16 +379,18 @@ def _detect_skips(tokens: list[JsToken], file_path: str) -> list[Violation]:
                     file_path=file_path,
                     line_number=tok.line_no,
                     symbol_name=title,
-                    message=f"Test '{title}' skipped with {tok.value}.skip",
+                    message=f"Test '{title}' skipped with {call_repr}",
                 ))
-                i += 4
+                i = close_paren_idx + 1
                 continue
 
         elif tok.value in XSKIP_KEYWORDS:
             if i + 1 < n and tokens[i + 1].value == "(":
+                open_paren_idx = i + 1
+                close_paren_idx = _find_matching_paren(tokens, open_paren_idx)
                 title = tok.value
-                arg_idx = i + 2
-                if arg_idx < n and tokens[arg_idx].type in ("STRING_DOUBLE", "STRING_SINGLE", "STRING_TEMPLATE"):
+                arg_idx = open_paren_idx + 1
+                if arg_idx < close_paren_idx and tokens[arg_idx].type in ("STRING_DOUBLE", "STRING_SINGLE", "STRING_TEMPLATE"):
                     title = _unquote_str(tokens[arg_idx].value)
 
                 violations.append(Violation(
@@ -317,7 +400,7 @@ def _detect_skips(tokens: list[JsToken], file_path: str) -> list[Violation]:
                     symbol_name=title,
                     message=f"Test '{title}' skipped with {tok.value}",
                 ))
-                i += 2
+                i = close_paren_idx + 1
                 continue
 
         i += 1

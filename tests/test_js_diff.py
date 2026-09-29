@@ -39,6 +39,20 @@ describe.skip("Payment Gateway", () => {
         skip_violations = [v for v in violations if v.type == ViolationType.TEST_SKIPPED]
         self.assertTrue(any(v.symbol_name == "Payment Gateway" for v in skip_violations))
 
+    def test_detect_test_describe_skip(self):
+        code = """
+test.describe.skip("Playwright E2E Suite", () => {
+    test("checkout flow", async ({ page }) => {
+        expect(await page.title()).toBe("Checkout");
+    });
+});
+"""
+        violations = analyze_js_test_code(code, file_path="e2e.spec.ts")
+        skip_violations = [v for v in violations if v.type == ViolationType.TEST_SKIPPED]
+        self.assertEqual(len(skip_violations), 1)
+        self.assertEqual(skip_violations[0].symbol_name, "Playwright E2E Suite")
+        self.assertIn("test.describe.skip", skip_violations[0].message)
+
     def test_detect_xit_and_xtest_and_xdescribe(self):
         code = """
 xit("legacy unit test", () => {
@@ -140,6 +154,46 @@ it("asserts values", () => {
         violations = analyze_js_test_diff(base_code, head_code, file_path="assert.test.js")
         removal_violations = [v for v in violations if v.type == ViolationType.ASSERTION_REMOVED]
         self.assertEqual(len(removal_violations), 1)
+        self.assertIn("2 -> 1", removal_violations[0].message)
+
+    def test_parameter_destructuring_assertion_decrease_detected(self):
+        base_code = """
+test("Playwright browser test", async ({ page, context }) => {
+    expect(await page.title()).toBe("Dashboard");
+    expect(await page.locator("#user").textContent()).toBe("Admin");
+});
+"""
+        head_code = """
+test("Playwright browser test", async ({ page, context }) => {
+    expect(await page.title()).toBe("Dashboard");
+});
+"""
+        violations = analyze_js_test_diff(base_code, head_code, file_path="dashboard.spec.ts")
+        removal_violations = [v for v in violations if v.type == ViolationType.ASSERTION_REMOVED]
+        self.assertEqual(len(removal_violations), 1)
+        self.assertEqual(removal_violations[0].symbol_name, "Playwright browser test")
+        self.assertIn("2 -> 1", removal_violations[0].message)
+
+    def test_test_describe_recursive_extraction_and_assertion_decrease(self):
+        base_code = """
+test.describe("Account Management", () => {
+    test("password reset", ({ expect }) => {
+        expect(sendEmail()).toBe(true);
+        expect(verifyToken()).toBe(true);
+    });
+});
+"""
+        head_code = """
+test.describe("Account Management", () => {
+    test("password reset", ({ expect }) => {
+        expect(sendEmail()).toBe(true);
+    });
+});
+"""
+        violations = analyze_js_test_diff(base_code, head_code, file_path="account.test.ts")
+        removal_violations = [v for v in violations if v.type == ViolationType.ASSERTION_REMOVED]
+        self.assertEqual(len(removal_violations), 1)
+        self.assertEqual(removal_violations[0].symbol_name, "password reset")
         self.assertIn("2 -> 1", removal_violations[0].message)
 
 
