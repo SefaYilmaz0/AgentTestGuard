@@ -4,13 +4,49 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "testguard-ai"
-version = "0.1.0"
+version = "0.2.0"
 description = "The Zero-Trust Anti-Cheat Gate for AI-Generated Code"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
-authors = [{name = "TestGuard Contributors"}]
+authors = [
+    {name = "Sefa Yılmaz", email = "sefa@example.com"},
+    {name = "TestGuard Contributors"}
+]
+keywords = [
+    "ai",
+    "llm",
+    "claude-code",
+    "testing",
+    "anti-cheat",
+    "goal-gaming",
+    "guardrail",
+    "ast",
+    "vitest",
+    "jest",
+    "playwright",
+    "pytest",
+    "ci-cd"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Testing",
+    "Operating System :: OS Independent"
+]
+
+[project.urls]
+Homepage = "https://github.com/SefaYilmaz0/AgentTestGuard"
+Documentation = "https://github.com/SefaYilmaz0/AgentTestGuard#readme"
+Repository = "https://github.com/SefaYilmaz0/AgentTestGuard"
+Issues = "https://github.com/SefaYilmaz0/AgentTestGuard/issues"
 
 [project.scripts]
 testguard = "testguard.cli:main"

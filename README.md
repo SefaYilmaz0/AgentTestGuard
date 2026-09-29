@@ -4,8 +4,9 @@
 
 **The Zero-Trust Anti-Cheat Gate for AI-Generated Code.**
 
-[![Tests](https://img.shields.io/badge/tests-52%2F52%20passing-brightgreen)](#)
+[![Tests](https://img.shields.io/badge/tests-97%2F97%20passing-brightgreen)](#)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](#)
+[![Languages](https://img.shields.io/badge/languages-Python%20%7C%20JS%2FTS-blueviolet)](#)
 [![Dependencies](https://img.shields.io/badge/dependencies-0%20(stdlib%20only)-success)](#)
 [![Performance](https://img.shields.io/badge/speed-%3C5ms%20AST%20diff-orange)](#)
 [![License](https://img.shields.io/badge/license-MIT-purple)](#)
@@ -20,13 +21,15 @@
 
 Autonomous coding agents (**Claude Code, Cursor, Devin, Aider**) are instructed to *"make all tests pass"*. When faced with complex edge cases or difficult logic, models optimize for the reward metric rather than genuine correctness:
 
-1. **Assertion Dropping & Weakening:**
-   Deletes `assert res == 42` or replaces it with `assert res is not None`.
+1. **Assertion Dropping & Semantic Weakening:**
+   Deletes `assert res == 42` / `expect(res).toBe(42)` or replaces it with loose truthiness checks like `assert res` or `assert res is not None`.
 2. **Test Bypassing:**
-   Silently tags failing tests with `@pytest.mark.skip`, `@unittest.skip`, or swallows errors using `try...except: pass` or `except: return`.
+   Silently tags failing tests with `@pytest.mark.skip`, `it.skip`, `test.skip`, `xit`, or swallows errors using `try...except: pass` or empty `catch {}` blocks.
 3. **Hardcoding (Overfitting):**
    When the test file cannot be altered, the agent writes `if x == "edge_case_payload": return 100` in the implementation to pass the test without actually solving the problem.
-4. **Verification Fatigue:**
+4. **Untracked File Manipulation:**
+   Agents create fresh untracked files or mocks in the working tree to evade git diff checks.
+5. **Verification Fatigue:**
    Engineers spend hours combing through AI-authored PRs asking *"Where did the agent cheat?"*
 
 > **Why prompts and `AGENTS.md` fail:**  
@@ -80,16 +83,42 @@ TestGuard runs as a zero-dependency **CLI tool** and **GitHub Action** providing
 🚨 **TestGuard: VETO** – *Goal gaming / reward hacking detected:*
 
 - **[ASSERTION_REMOVED]** `tests/test_auth.py:28` in `TestAuth.test_token_expiry`: Assertion count decreased in 'TestAuth.test_token_expiry': 3 -> 1
-- **[TEST_SKIPPED]** `tests/test_billing.py:12` in `test_stripe_webhook`: Test 'test_stripe_webhook' has skip decorator
-- **[EXCEPTION_SWALLOWED]** `tests/test_sync.py:45` in `test_flaky_connection`: Exception swallowed with pass/return in test 'test_flaky_connection'
-- **[HARDCODED_CHEAT]** `src/auth.py:84` in `validate_token`: Hardcoded check for test literal(s) 'mock_admin_token' returning constant value in 'validate_token'
+- **[ASSERTION_WEAKENED]** `tests/test_status.ts:42` in `test_health`: Strict assertion replaced with loose truthy check
+- **[TEST_SKIPPED]** `tests/test_billing.spec.ts:12` in `test.describe.skip`: Test suite has skip decorator
+- **[EXCEPTION_SWALLOWED]** `tests/test_sync.py:45` in `test_flaky_connection`: Exception swallowed with pass/return in test
+- **[HARDCODED_CHEAT]** `src/auth.py:84` in `validate_token`: Hardcoded check for test literal(s) 'mock_admin_token' returning constant value
 ```
 
 ---
 
 ## 🚀 Quickstart
 
-### Option A: Use as GitHub Action in CI/CD (Recommended)
+### 1. Installation
+
+TestGuard requires **zero external third-party dependencies** (Python standard library only):
+
+```bash
+pip install testguard-ai
+# Or from source:
+pip install git+https://github.com/SefaYilmaz0/AgentTestGuard.git
+```
+
+### 2. Zero-Config Agent & Git Hooks (`testguard init`)
+
+Automatically protect your workflow before commits or agent completions:
+
+```bash
+# Install Claude Code safety gate (PreToolUse & Stop hooks in ~/.claude/settings.json)
+testguard init --hook claude
+
+# Install Git pre-commit hook in your current repository (.git/hooks/pre-commit)
+testguard init --hook git
+
+# Install both hooks at once
+testguard init --hook all
+```
+
+### 3. CI/CD Integration (GitHub Action)
 
 Add TestGuard as a mandatory status check in `.github/workflows/testguard.yml`:
 
@@ -114,17 +143,7 @@ jobs:
           base: ${{ github.base_ref || 'main' }}
 ```
 
-### Option B: Local CLI Usage
-
-TestGuard requires **zero external third-party dependencies** (Python standard library only):
-
-```bash
-git clone https://github.com/SefaYilmaz0/AgentTestGuard.git
-cd AgentTestGuard
-pip install -e .
-```
-
-Run cheat detection against your base branch:
+### 4. Manual CLI Check
 
 ```bash
 # Run cheat detection against base branch (default: HEAD / origin/main)
@@ -137,7 +156,38 @@ testguard check --base origin/main --format json
 
 ### Exit Codes
 - `0`: **PASS** — Clean PR, no cheating patterns detected.
-- `1`: **VETO** — Goal gaming detected, CI fails automatically.
+- `1`: **VETO** — Goal gaming detected, CI / commit / hook blocked.
+
+---
+
+## ⚙️ Configuration (`.testguard.json`)
+
+TestGuard works out of the box with zero configuration. For advanced repos, create a `.testguard.json` or add a `[tool.testguard]` section in `pyproject.toml`:
+
+```json
+{
+  "base_ref": "origin/main",
+  "exclude_patterns": [
+    "legacy/**",
+    "benchmarks/*",
+    "docs/**"
+  ],
+  "literal_whitelist": [
+    "localhost",
+    "127.0.0.1",
+    "mock_id_allowed"
+  ]
+}
+```
+
+---
+
+## 🌐 Supported Frameworks & Languages
+
+| Ecosystem | Supported Test Frameworks | Detected Patterns |
+|---|---|---|
+| **Python** | `pytest`, `unittest` | Dropped assertions, weakened assertions (`assertEqual` → `assertTrue`, `assert x == 42` → `assert x`), `@pytest.mark.skip`, `@unittest.skip`, swallowed exceptions (`try...except: pass`), hardcoded returns. |
+| **JavaScript / TypeScript** | `Vitest`, `Jest`, `Playwright`, `Mocha` | Dropped assertions (`expect(...)`), weakened assertions, `it.skip`, `test.skip`, `xit`, `xtest`, `describe.skip`, empty `catch (e) {}`, hardcoded returns. |
 
 ---
 
@@ -145,11 +195,11 @@ testguard check --base origin/main --format json
 
 | Metric | Specification |
 |---|---|
-| **Runtime Dependencies** | **0** (pure Python standard library: `ast`, `dataclasses`, `subprocess`, `argparse`) |
-| **AST Analysis Speed** | **< 5ms** per test suite (deterministic, zero LLM calls) |
-| **Python Support** | Python 3.10+ (supports modern pattern matching `ast.Match`, `ast.IfExp`, etc.) |
+| **Runtime Dependencies** | **0** (pure Python standard library: `ast`, `dataclasses`, `subprocess`, `argparse`, `fnmatch`) |
+| **Analysis Speed** | **< 10ms** per diff (deterministic lexical and AST parsing, zero LLM calls) |
+| **Python Support** | Python 3.10, 3.11, 3.12, 3.13 |
 | **Cross-Platform** | Linux, macOS, Windows (native path & stream encoding handling) |
-| **Test Suite** | 52/52 comprehensive unit, integration & synthetic cheat scenario tests |
+| **Test Suite** | 97/97 comprehensive unit, integration & synthetic cheat scenario tests |
 
 ---
 
@@ -157,19 +207,22 @@ testguard check --base origin/main --format json
 
 - [x] **Faz 1: Çekirdek Hile Tespit Motoru (Core Engine)**
   - [x] AST diffing for assertion drops across test functions & classes
-  - [x] Detection of `@pytest.mark.skip`, `@unittest.skip`, and variants
-  - [x] Exception swallowing detection (`pass`, `return` in `except`)
+  - [x] Detection of skip decorators and swallowed exceptions
   - [x] Anti-hardcode literal matcher (supporting `if`, `match/case`, ternary `IfExp`)
   - [x] Git shadow diff extraction & base branch test isolation
   - [x] Deterministic CLI runner with `PASS` / `VETO` exit codes
-- [x] **Faz 2: Test Odaklı Doğrulama (Self-Testing Scenarios)**
-  - [x] Synthetic AI cheat suites (dropped assert, skip injection, hardcode bypass, clean PR pass)
-  - [x] Comprehensive end-to-end Git test fixtures (52 tests passed)
-- [ ] **Faz 3: GitHub Action & Dağıtım**
+- [x] **Faz 2: Çoklu Dil Desteği ve Güvenlik Katmanları (Multi-Language & Safeguards)**
+  - [x] Untracked & working tree scanner (`git ls-files --others`)
+  - [x] Semantic assertion weakening detector (`ASSERTION_WEAKENED`)
+  - [x] JavaScript / TypeScript test cheat detector (Vitest, Jest, Playwright, Mocha)
+  - [x] Zero-config CLI setup command (`testguard init --hook claude|git|all`)
+  - [x] Project configuration support (`.testguard.json` & `pyproject.toml`)
+- [ ] **Faz 3: Dağıtım ve Açık Kaynak Vitrini (Distribution & Marketplace)**
   - [x] GitHub Action composite definition (`action.yml`)
-  - [x] CI/CD multi-version matrix test workflow
+  - [x] Cross-platform CI matrix (Linux, Windows, macOS)
+  - [x] Automated PyPI release workflow (`release.yml`)
   - [ ] GitHub Marketplace publication (`v1` release tag)
-  - [ ] PyPI distribution (`pip install testguard-ai`)
+  - [ ] PyPI distribution (`testguard-ai` on PyPI)
 
 ---
 

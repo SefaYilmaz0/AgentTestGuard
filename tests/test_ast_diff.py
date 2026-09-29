@@ -253,6 +253,24 @@ def test_calc(self):
         self.assertEqual(violations[0].type, ViolationType.ASSERTION_WEAKENED)
         self.assertEqual(violations[0].symbol_name, "test_calc")
 
+    def test_assertion_weakened_attribute_truthiness_exact_line(self):
+        base_code = """
+def test_status():
+    res = get_response()
+    assert res.status_code == 200
+"""
+        head_code = """
+def test_status():
+    res = get_response()
+    assert res.is_valid
+"""
+        violations = analyze_ast_diff(base_code, head_code, file_path="tests/test_status.py")
+        self.assertEqual(len(violations), 1)
+        self.assertEqual(violations[0].type, ViolationType.ASSERTION_WEAKENED)
+        self.assertEqual(violations[0].symbol_name, "test_status")
+        # Line number should point directly to the assert line (line 4) rather than def (line 2)
+        self.assertEqual(violations[0].line_number, 4)
+
 
 if __name__ == "__main__":
     unittest.main()

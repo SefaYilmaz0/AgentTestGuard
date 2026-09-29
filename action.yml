@@ -18,6 +18,10 @@ inputs:
     description: "Working directory"
     required: false
     default: "."
+  config:
+    description: "Path to configuration file (.testguard.json or pyproject.toml)"
+    required: false
+    default: ""
 
 outputs:
   verdict:
@@ -47,7 +51,11 @@ runs:
       run: |
         git fetch origin ${{ inputs.base }} --depth=1 || true
         set +e
-        OUTPUT=$(testguard check --base "${{ inputs.base }}" --format "${{ inputs.format }}" --cwd "${{ inputs.cwd }}")
+        CONFIG_FLAG=""
+        if [ -n "${{ inputs.config }}" ]; then
+          CONFIG_FLAG="--config ${{ inputs.config }}"
+        fi
+        OUTPUT=$(testguard check --base "${{ inputs.base }}" --format "${{ inputs.format }}" --cwd "${{ inputs.cwd }}" $CONFIG_FLAG)
         EXIT_CODE=$?
         set -e
 

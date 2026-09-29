@@ -118,6 +118,7 @@ class TestShadowRunner(unittest.TestCase):
                 f.write("log data\n")
 
             changed = get_changed_files("HEAD", cwd=tmpdir)
+            self.assertCountEqual(changed, ["tracked.py", "untracked.py"])
             self.assertIn("tracked.py", changed)
             self.assertIn("untracked.py", changed)
             self.assertNotIn("debug.log", changed)

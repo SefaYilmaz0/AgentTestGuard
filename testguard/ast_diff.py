@@ -53,7 +53,7 @@ def _is_strict_assertion(node: ast.AST) -> bool:
 
 def _is_weak_assertion(node: ast.AST) -> bool:
     if isinstance(node, ast.Assert):
-        if isinstance(node.test, ast.Name):
+        if isinstance(node.test, (ast.Name, ast.Attribute)):
             return True
         if (
             isinstance(node.test, ast.Call)
