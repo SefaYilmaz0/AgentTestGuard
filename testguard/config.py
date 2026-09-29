@@ -29,6 +29,7 @@ class TestGuardConfig:
     def __post_init__(self) -> None:
         if not isinstance(self.exclude_patterns, list):
             self.exclude_patterns = list(self.exclude_patterns)
+        self.exclude_patterns = [str(p).strip() for p in self.exclude_patterns if p and str(p).strip()]
         if not isinstance(self.literal_whitelist, set):
             self.literal_whitelist = set(self.literal_whitelist)
 
@@ -39,7 +40,11 @@ def is_file_excluded(file_path: str, patterns: list[str]) -> bool:
         return False
     norm_path = file_path.replace("\\", "/").lstrip("/")
     for pat in patterns:
-        pat_norm = pat.replace("\\", "/").lstrip("/")
+        if not pat or not str(pat).strip():
+            continue
+        pat_norm = str(pat).replace("\\", "/").strip().lstrip("/")
+        if not pat_norm:
+            continue
         if fnmatch.fnmatch(norm_path, pat_norm) or fnmatch.fnmatch(norm_path, f"*/{pat_norm}"):
             return True
         pat_dir = pat_norm.rstrip("/")
@@ -52,8 +57,10 @@ def is_file_excluded(file_path: str, patterns: list[str]) -> bool:
 
 
 def _parse_dict_to_config(data: dict[str, Any]) -> TestGuardConfig:
-    exclude_patterns = data.get("exclude_patterns", [])
-    if not isinstance(exclude_patterns, list):
+    raw_patterns = data.get("exclude_patterns", [])
+    if isinstance(raw_patterns, (list, set, tuple)):
+        exclude_patterns = [str(p).strip() for p in raw_patterns if p and str(p).strip()]
+    else:
         exclude_patterns = []
 
     raw_whitelist = data.get("literal_whitelist", [])

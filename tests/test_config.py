@@ -101,6 +101,15 @@ literal_whitelist = ["localhost", "127.0.0.1", 8080]
         self.assertIsNone(cfg.base_ref)
         self.assertIn("Warning", stderr_capture.getvalue())
 
+    def test_exclude_patterns_sanitization(self):
+        cfg = TestGuardConfig(exclude_patterns=["", "   ", "legacy/*", "archive/**"])
+        self.assertEqual(cfg.exclude_patterns, ["legacy/*", "archive/**"])
+
+        # Check parsing with empty or whitespace patterns from JSON
+        self._write_file(".testguard.json", json.dumps({"exclude_patterns": ["", "  ", "tests/fixtures/*"]}))
+        loaded = load_config(cwd=self.cwd)
+        self.assertEqual(loaded.exclude_patterns, ["tests/fixtures/*"])
+
 
 class TestConfigIntegration(unittest.TestCase):
     def setUp(self):
@@ -187,22 +196,30 @@ class TestConfigIntegration(unittest.TestCase):
         self.assertEqual(report_with.verdict, Verdict.PASS)
 
     def test_config_base_ref_applied_when_evaluating_head(self):
-        # Create initial commit on default branch
-        self._write_file("file.txt", "v1\n")
+        # 1. Base commit on stable_base with 2 assertions
+        self._write_file(
+            "tests/test_feature.py",
+            "def test_feature():\n    assert 1 == 1\n    assert 2 == 2\n",
+        )
         self._run_git(["add", "."])
-        self._run_git(["commit", "-m", "v1"])
-
-        # Create branch 'stable_base'
+        self._run_git(["commit", "-m", "commit on stable_base"])
         self._run_git(["branch", "stable_base"])
 
-        # Add .testguard.json setting base_ref to 'stable_base'
+        # 2. Next commit: assertion removed and .testguard.json added pointing to stable_base
+        self._write_file(
+            "tests/test_feature.py",
+            "def test_feature():\n    assert 1 == 1\n",
+        )
         self._write_file(".testguard.json", json.dumps({"base_ref": "stable_base"}))
         self._run_git(["add", "."])
-        self._run_git(["commit", "-m", "add config"])
+        self._run_git(["commit", "-m", "remove assertion and add config"])
 
-        # evaluate_changes with default base_ref='HEAD' should resolve base_ref to 'stable_base'
-        cfg = load_config(cwd=self.repo_dir)
-        self.assertEqual(cfg.base_ref, "stable_base")
+        # Working tree is clean relative to HEAD.
+        # If evaluated against HEAD, there would be no changes (PASS).
+        # But evaluate_changes(base_ref="HEAD") must resolve base_ref to "stable_base" via config -> VETO.
+        report = evaluate_changes(base_ref="HEAD", cwd=self.repo_dir)
+        self.assertEqual(report.verdict, Verdict.VETO)
+        self.assertTrue(any(v.type == ViolationType.ASSERTION_REMOVED for v in report.violations))
 
     def test_cli_config_flag(self):
         # Setup repo with cheat that is whitelisted via custom config file
