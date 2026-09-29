@@ -9,6 +9,7 @@ import json
 import sys
 from typing import Optional
 
+from testguard.config import load_config
 from testguard.installer import install_claude_hook, install_git_hook
 from testguard.verdict import evaluate_changes, format_markdown_report
 
@@ -41,6 +42,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         "--format", choices=["text", "json", "markdown"], default="text", help="Output format"
     )
     common.add_argument("--cwd", default=".", help="Directory to run check in")
+    common.add_argument(
+        "--config", default=None, help="Path to configuration file (.testguard.json or pyproject.toml)"
+    )
 
     parser = argparse.ArgumentParser(
         prog="testguard",
@@ -96,7 +100,8 @@ def main(argv: Optional[list[str]] = None) -> int:
 
         return 0 if success else 1
 
-    report = evaluate_changes(base_ref=args.base, cwd=args.cwd)
+    config = load_config(cwd=args.cwd, config_path=args.config)
+    report = evaluate_changes(base_ref=args.base, cwd=args.cwd, config=config)
 
     if args.format == "json":
         _safe_print(json.dumps(report.to_dict(), indent=2, ensure_ascii=False))

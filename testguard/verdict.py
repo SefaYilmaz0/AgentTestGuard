@@ -17,20 +17,33 @@ from testguard.js_diff import (
     analyze_js_test_diff,
     extract_js_test_literals,
 )
+from testguard.config import TestGuardConfig, is_file_excluded, load_config
 from testguard.models import Report, Verdict, Violation
 from testguard.shadow import get_changed_files, get_file_content_at_ref, is_test_file
 
 
-def evaluate_changes(base_ref: str = "HEAD", cwd: str = ".") -> Report:
+def evaluate_changes(
+    base_ref: str = "HEAD",
+    cwd: str = ".",
+    config: Optional[TestGuardConfig] = None,
+) -> Report:
     """Evaluate repository changes against base_ref and return a comprehensive verification Report.
 
     Inspects changed test files for assertion decreases, skips, or swallowed exceptions.
     Inspects changed source files for hardcoded cheating against test literals.
     """
+    if config is None:
+        config = load_config(cwd=cwd)
+
+    if base_ref == "HEAD" and config.base_ref:
+        base_ref = config.base_ref
+
     start_time = time.perf_counter()
     violations: list[Violation] = []
 
     changed_files = get_changed_files(base_ref, cwd=cwd)
+    if config.exclude_patterns:
+        changed_files = [f for f in changed_files if not is_file_excluded(f, config.exclude_patterns)]
     test_files = [f for f in changed_files if is_test_file(f)]
     src_files = [f for f in changed_files if not is_test_file(f) and f.endswith(".py")]
 
@@ -83,6 +96,8 @@ def evaluate_changes(base_ref: str = "HEAD", cwd: str = ".") -> Report:
             dirs[:] = [d for d in dirs if d not in excluded_dirs]
             for file in files:
                 rel_path = os.path.relpath(os.path.join(root, file), cwd).replace("\\", "/")
+                if config.exclude_patterns and is_file_excluded(rel_path, config.exclude_patterns):
+                    continue
                 if is_test_file(rel_path):
                     if file.endswith(".py"):
                         try:
@@ -96,6 +111,16 @@ def evaluate_changes(base_ref: str = "HEAD", cwd: str = ".") -> Report:
                                 collected_literals.update(extract_js_test_literals(f.read()))
                         except OSError:
                             pass
+
+    if config.literal_whitelist:
+        whitelist = set(config.literal_whitelist)
+        for item in list(whitelist):
+            if isinstance(item, (int, float)):
+                whitelist.add(str(item))
+        collected_literals = {
+            lit for lit in collected_literals
+            if lit not in whitelist and str(lit) not in whitelist
+        }
 
     for src_file in src_files:
         full_path = os.path.join(cwd, src_file)
@@ -117,9 +142,13 @@ def evaluate_changes(base_ref: str = "HEAD", cwd: str = ".") -> Report:
     )
 
 
-def run_testguard(base_ref: str = "HEAD", cwd: str = ".") -> Report:
+def run_testguard(
+    base_ref: str = "HEAD",
+    cwd: str = ".",
+    config: Optional[TestGuardConfig] = None,
+) -> Report:
     """Alias for evaluate_changes."""
-    return evaluate_changes(base_ref=base_ref, cwd=cwd)
+    return evaluate_changes(base_ref=base_ref, cwd=cwd, config=config)
 
 
 def format_markdown_report(report: Report) -> str:
