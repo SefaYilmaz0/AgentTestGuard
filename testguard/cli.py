@@ -9,6 +9,7 @@ import json
 import sys
 from typing import Optional
 
+from testguard.installer import install_claude_hook, install_git_hook
 from testguard.verdict import evaluate_changes, format_markdown_report
 
 
@@ -54,7 +55,46 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="Run cheat detection against base git branch",
     )
 
+    init_parser = subparsers.add_parser(
+        "init",
+        help="Install TestGuard hooks for Claude Code or Git",
+    )
+    init_parser.add_argument(
+        "--hook",
+        choices=["claude", "git", "all"],
+        default="claude",
+        help="Hook to install: 'claude', 'git', or 'all' (default: claude)",
+    )
+    init_parser.add_argument(
+        "--claude-dir",
+        default=None,
+        help="Target Claude configuration directory (default: ~/.claude)",
+    )
+    init_parser.add_argument(
+        "--git-dir",
+        default=None,
+        help="Target Git directory (default: .git)",
+    )
+
     args = parser.parse_args(argv)
+
+    if args.command == "init":
+        success = True
+        if args.hook in ("claude", "all"):
+            if install_claude_hook(claude_dir=args.claude_dir):
+                _safe_print("🛡️  TestGuard Claude Code hook installed successfully.")
+            else:
+                _safe_print("🚨 Failed to install TestGuard Claude Code hook.")
+                success = False
+
+        if args.hook in ("git", "all"):
+            if install_git_hook(git_dir=args.git_dir):
+                _safe_print("🛡️  TestGuard Git pre-commit hook installed successfully.")
+            else:
+                _safe_print("🚨 Failed to install TestGuard Git pre-commit hook.")
+                success = False
+
+        return 0 if success else 1
 
     report = evaluate_changes(base_ref=args.base, cwd=args.cwd)
 
