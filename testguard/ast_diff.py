@@ -5,6 +5,99 @@ from testguard.models import Violation, ViolationType
 FunctionNodeType = Union[ast.FunctionDef, ast.AsyncFunctionDef]
 
 
+WEAK_ASSERT_NAMES = {
+    "assertTrue",
+    "assert_true",
+    "assertIsNotNone",
+    "assert_is_not_none",
+    "assertTruthy",
+    "assert_truthy",
+}
+
+
+def _is_not_none_compare(node: ast.AST) -> bool:
+    if not isinstance(node, ast.Compare):
+        return False
+    has_is_not = any(isinstance(op, (ast.IsNot, ast.NotEq)) for op in node.ops)
+    if not has_is_not:
+        return False
+
+    def is_none(expr: ast.AST) -> bool:
+        return isinstance(expr, ast.Constant) and expr.value is None
+
+    return is_none(node.left) or any(is_none(comp) for comp in node.comparators)
+
+
+def _is_strict_assertion(node: ast.AST) -> bool:
+    if isinstance(node, ast.Assert):
+        if isinstance(node.test, ast.Compare):
+            return not _is_not_none_compare(node.test)
+        return False
+    elif isinstance(node, ast.Call):
+        call_name = ""
+        if isinstance(node.func, ast.Attribute) and node.func.attr.startswith("assert"):
+            call_name = node.func.attr
+        elif isinstance(node.func, ast.Name) and node.func.id.startswith("assert"):
+            call_name = node.func.id
+
+        if not call_name:
+            return False
+
+        if call_name in WEAK_ASSERT_NAMES:
+            if node.args and isinstance(node.args[0], ast.Compare):
+                return not _is_not_none_compare(node.args[0])
+            return False
+        return True
+    return False
+
+
+def _is_weak_assertion(node: ast.AST) -> bool:
+    if isinstance(node, ast.Assert):
+        if isinstance(node.test, ast.Name):
+            return True
+        if (
+            isinstance(node.test, ast.Call)
+            and isinstance(node.test.func, ast.Name)
+            and node.test.func.id == "bool"
+        ):
+            return True
+        if isinstance(node.test, ast.Compare) and _is_not_none_compare(node.test):
+            return True
+        return False
+    elif isinstance(node, ast.Call):
+        call_name = ""
+        if isinstance(node.func, ast.Attribute) and node.func.attr.startswith("assert"):
+            call_name = node.func.attr
+        elif isinstance(node.func, ast.Name) and node.func.id.startswith("assert"):
+            call_name = node.func.id
+
+        if not call_name:
+            return False
+
+        if call_name in WEAK_ASSERT_NAMES:
+            if node.args and isinstance(node.args[0], ast.Compare):
+                return _is_not_none_compare(node.args[0])
+            return True
+        return False
+    return False
+
+
+def _count_strict_assertions_in_node(node: ast.AST) -> int:
+    count = 0
+    for child in ast.walk(node):
+        if _is_strict_assertion(child):
+            count += 1
+    return count
+
+
+def _count_weak_assertions_in_node(node: ast.AST) -> int:
+    count = 0
+    for child in ast.walk(node):
+        if _is_weak_assertion(child):
+            count += 1
+    return count
+
+
 def _count_assertions_in_node(node: ast.AST) -> int:
     count = 0
     for child in ast.walk(node):
@@ -200,7 +293,12 @@ def analyze_ast_diff(base_code: str, head_code: str, file_path: str) -> list[Vio
         if func_name in head_funcs:
             head_node = head_funcs[func_name]
             head_count = _count_assertions_in_node(head_node)
+            base_strict = _count_strict_assertions_in_node(base_node)
+            head_strict = _count_strict_assertions_in_node(head_node)
+            flagged_removed = False
+
             if head_count < base_count:
+                flagged_removed = True
                 violations.append(
                     Violation(
                         type=ViolationType.ASSERTION_REMOVED,
@@ -209,6 +307,29 @@ def analyze_ast_diff(base_code: str, head_code: str, file_path: str) -> list[Vio
                         symbol_name=func_name,
                         message=f"Assertion count decreased in '{func_name}': {base_count} -> {head_count}",
                         details={"base_count": base_count, "head_count": head_count},
+                    )
+                )
+
+            base_weak = _count_weak_assertions_in_node(base_node)
+            head_weak = _count_weak_assertions_in_node(head_node)
+            if head_strict < base_strict and (not flagged_removed or head_weak > base_weak):
+                weak_nodes = [
+                    child
+                    for child in ast.walk(head_node)
+                    if _is_weak_assertion(child) and hasattr(child, "lineno")
+                ]
+                line_no = weak_nodes[0].lineno if weak_nodes else head_node.lineno
+                violations.append(
+                    Violation(
+                        type=ViolationType.ASSERTION_WEAKENED,
+                        file_path=file_path,
+                        line_number=line_no,
+                        symbol_name=func_name,
+                        message=f"Assertion weakened in '{func_name}': strict assertion replaced with loose check",
+                        details={
+                            "base_strict_count": base_strict,
+                            "head_strict_count": head_strict,
+                        },
                     )
                 )
         else:

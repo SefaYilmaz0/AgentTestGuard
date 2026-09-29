@@ -205,6 +205,54 @@ class TestBilling:
         self.assertEqual(analyze_test_code(json_code, file_path="tests/fixtures.json"), [])
         self.assertEqual(analyze_ast_diff(json_code, json_code, file_path="tests/fixtures.json"), [])
 
+    def test_assertion_weakened_from_equality_to_truthiness(self):
+        base_code = """
+def test_calc():
+    res = compute_value()
+    assert res == 42
+"""
+        head_code = """
+def test_calc():
+    res = compute_value()
+    assert res
+"""
+        violations = analyze_ast_diff(base_code, head_code, file_path="tests/test_calc.py")
+        self.assertEqual(len(violations), 1)
+        self.assertEqual(violations[0].type, ViolationType.ASSERTION_WEAKENED)
+        self.assertEqual(violations[0].symbol_name, "test_calc")
+        self.assertIn("Assertion weakened", violations[0].message)
+
+    def test_assertion_weakened_from_equality_to_not_none(self):
+        base_code = """
+def test_calc():
+    res = compute_value()
+    assert res == 42
+"""
+        head_code = """
+def test_calc():
+    res = compute_value()
+    assert res is not None
+"""
+        violations = analyze_ast_diff(base_code, head_code, file_path="tests/test_calc.py")
+        self.assertEqual(len(violations), 1)
+        self.assertEqual(violations[0].type, ViolationType.ASSERTION_WEAKENED)
+        self.assertEqual(violations[0].symbol_name, "test_calc")
+        self.assertIn("Assertion weakened", violations[0].message)
+
+    def test_assertion_weakened_unittest_style(self):
+        base_code = """
+def test_calc(self):
+    self.assertEqual(compute_value(), 42)
+"""
+        head_code = """
+def test_calc(self):
+    self.assertTrue(compute_value())
+"""
+        violations = analyze_ast_diff(base_code, head_code, file_path="tests/test_calc.py")
+        self.assertEqual(len(violations), 1)
+        self.assertEqual(violations[0].type, ViolationType.ASSERTION_WEAKENED)
+        self.assertEqual(violations[0].symbol_name, "test_calc")
+
 
 if __name__ == "__main__":
     unittest.main()
