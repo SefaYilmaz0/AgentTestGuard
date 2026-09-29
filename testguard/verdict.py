@@ -11,6 +11,12 @@ from typing import Optional
 
 from testguard.anti_hardcode import detect_hardcoded_cheats, extract_test_literals
 from testguard.ast_diff import analyze_ast_diff, analyze_test_code
+from testguard.js_diff import (
+    JS_TS_EXTENSIONS,
+    analyze_js_test_code,
+    analyze_js_test_diff,
+    extract_js_test_literals,
+)
 from testguard.models import Report, Verdict, Violation
 from testguard.shadow import get_changed_files, get_file_content_at_ref, is_test_file
 
@@ -31,26 +37,40 @@ def evaluate_changes(base_ref: str = "HEAD", cwd: str = ".") -> Report:
     collected_literals: set = set()
 
     for test_file in test_files:
-        if not test_file.endswith(".py"):
+        is_py = test_file.endswith(".py")
+        is_js = any(test_file.endswith(ext) for ext in JS_TS_EXTENSIONS)
+        if not (is_py or is_js):
             continue
+
         full_path = os.path.join(cwd, test_file)
         if not os.path.exists(full_path):
             base_content = get_file_content_at_ref(base_ref, test_file, cwd=cwd)
             if base_content is not None:
-                violations.extend(analyze_ast_diff(base_content, "", file_path=test_file))
+                if is_py:
+                    violations.extend(analyze_ast_diff(base_content, "", file_path=test_file))
+                elif is_js:
+                    violations.extend(analyze_js_test_diff(base_content, "", file_path=test_file))
             continue
 
         with open(full_path, "r", encoding="utf-8", errors="ignore") as f:
             head_content = f.read()
 
-        collected_literals.update(extract_test_literals(head_content))
         base_content = get_file_content_at_ref(base_ref, test_file, cwd=cwd)
 
-        if base_content is not None:
-            collected_literals.update(extract_test_literals(base_content))
-            violations.extend(analyze_ast_diff(base_content, head_content, file_path=test_file))
-        else:
-            violations.extend(analyze_test_code(head_content, file_path=test_file))
+        if is_py:
+            collected_literals.update(extract_test_literals(head_content))
+            if base_content is not None:
+                collected_literals.update(extract_test_literals(base_content))
+                violations.extend(analyze_ast_diff(base_content, head_content, file_path=test_file))
+            else:
+                violations.extend(analyze_test_code(head_content, file_path=test_file))
+        elif is_js:
+            collected_literals.update(extract_js_test_literals(head_content))
+            if base_content is not None:
+                collected_literals.update(extract_js_test_literals(base_content))
+                violations.extend(analyze_js_test_diff(base_content, head_content, file_path=test_file))
+            else:
+                violations.extend(analyze_js_test_code(head_content, file_path=test_file))
 
     # When src_files are present, collect literals from all existing test files in repo
     # to ensure untouched tests also protect modified source files
@@ -63,12 +83,19 @@ def evaluate_changes(base_ref: str = "HEAD", cwd: str = ".") -> Report:
             dirs[:] = [d for d in dirs if d not in excluded_dirs]
             for file in files:
                 rel_path = os.path.relpath(os.path.join(root, file), cwd).replace("\\", "/")
-                if is_test_file(rel_path) and file.endswith(".py"):
-                    try:
-                        with open(os.path.join(root, file), "r", encoding="utf-8", errors="ignore") as f:
-                            collected_literals.update(extract_test_literals(f.read()))
-                    except OSError:
-                        pass
+                if is_test_file(rel_path):
+                    if file.endswith(".py"):
+                        try:
+                            with open(os.path.join(root, file), "r", encoding="utf-8", errors="ignore") as f:
+                                collected_literals.update(extract_test_literals(f.read()))
+                        except OSError:
+                            pass
+                    elif any(file.endswith(ext) for ext in JS_TS_EXTENSIONS):
+                        try:
+                            with open(os.path.join(root, file), "r", encoding="utf-8", errors="ignore") as f:
+                                collected_literals.update(extract_js_test_literals(f.read()))
+                        except OSError:
+                            pass
 
     for src_file in src_files:
         full_path = os.path.join(cwd, src_file)
