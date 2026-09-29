@@ -42,9 +42,9 @@ if hasattr(sys.stderr, "reconfigure"):
         pass
 
 
-GIT_COMMIT = re.compile(r"\\bgit\\b((?:\\s+-[Cc]\\s+(?:\"[^\"]+\"|'[^']+'|\\S+))*)\\s+commit\\b")
-GIT_DASH_C = re.compile(r"-C\\s+(\"[^\"]+\"|'[^']+'|\\S+)")
-CD = re.compile(r"(?:^|[;&|]\\s*)(?:cd|Set-Location|pushd)\\s+(\"[^\"]+\"|'[^']+'|[^\\s;&|]+)")
+GIT_COMMIT = re.compile(r"\\bgit\\b((?:\\s+-[Cc]\\s+(?:\\"[^\\"]+\\"|'[^']+'|\\S+))*)\\s+commit\\b")
+GIT_DASH_C = re.compile(r"-C\\s+(\\"[^\\"]+\\"|'[^']+'|\\S+)")
+CD = re.compile(r"(?:^|[;&|]\\s*)(?:cd|Set-Location|pushd)\\s+(\\"[^\\"]+\\"|'[^']+'|[^\\s;&|]+)")
 
 
 def commit_dir(command, cwd):
@@ -57,7 +57,7 @@ def commit_dir(command, cwd):
     target = (dash_c or cds or [None])[-1]
     if not target:
         return cwd
-    target = os.path.expanduser(target.strip("\"'"))
+    target = os.path.expanduser(target.strip('\\"\\''))
     return os.path.normpath(os.path.join(cwd, target))
 
 
@@ -188,10 +188,19 @@ def install_claude_hook(claude_dir: Optional[str] = None) -> bool:
             try:
                 with open(settings_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                    if isinstance(data, dict):
-                        settings = data
-            except Exception:
-                settings = {}
+                    if not isinstance(data, dict):
+                        print(
+                            f"Error: Malformed settings.json at '{settings_path}': expected JSON object.",
+                            file=sys.stderr,
+                        )
+                        return False
+                    settings = data
+            except Exception as exc:
+                print(
+                    f"Error: Malformed settings.json at '{settings_path}': {exc}",
+                    file=sys.stderr,
+                )
+                return False
 
         # 3. Update permissions.allow
         permissions = settings.setdefault("permissions", {})

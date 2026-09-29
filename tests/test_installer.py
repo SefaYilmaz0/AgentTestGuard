@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import py_compile
 import stat
 import tempfile
 import unittest
@@ -21,9 +22,11 @@ class TestInstaller(unittest.TestCase):
             success = install_claude_hook(claude_dir=tmpdir)
             self.assertTrue(success)
 
-            # 1. Verify testguard_gate.py created
+            # 1. Verify testguard_gate.py created and compiles as valid Python
             gate_path = os.path.join(tmpdir, "hooks", "testguard_gate.py")
             self.assertTrue(os.path.isfile(gate_path))
+            py_compile.compile(gate_path, doraise=True)
+
             with open(gate_path, "r", encoding="utf-8") as f:
                 content = f.read()
 
@@ -186,6 +189,38 @@ class TestInstaller(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertTrue(os.path.isfile(os.path.join(claude_dir, "hooks", "testguard_gate.py")))
             self.assertTrue(os.path.isfile(os.path.join(git_dir, "hooks", "pre-commit")))
+
+    def test_install_claude_hook_fails_on_malformed_settings(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings_path = os.path.join(tmpdir, "settings.json")
+            with open(settings_path, "w", encoding="utf-8") as f:
+                f.write("{ invalid json")
+
+            err = io.StringIO()
+            with patch("sys.stderr", err):
+                success = install_claude_hook(claude_dir=tmpdir)
+            self.assertFalse(success)
+            self.assertIn("Malformed settings.json", err.getvalue())
+
+            # Verify corrupted file was not overwritten
+            with open(settings_path, "r", encoding="utf-8") as f:
+                self.assertEqual(f.read(), "{ invalid json")
+
+    def test_install_claude_hook_fails_on_non_dict_settings(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings_path = os.path.join(tmpdir, "settings.json")
+            with open(settings_path, "w", encoding="utf-8") as f:
+                f.write("[1, 2, 3]")
+
+            err = io.StringIO()
+            with patch("sys.stderr", err):
+                success = install_claude_hook(claude_dir=tmpdir)
+            self.assertFalse(success)
+            self.assertIn("expected JSON object", err.getvalue())
+
+            # Verify original content was not overwritten
+            with open(settings_path, "r", encoding="utf-8") as f:
+                self.assertEqual(f.read(), "[1, 2, 3]")
 
 
 if __name__ == "__main__":
