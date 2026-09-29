@@ -8,7 +8,8 @@ version = "0.1.0"
 description = "The Zero-Trust Anti-Cheat Gate for AI-Generated Code"
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "MIT"}
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{name = "TestGuard Contributors"}]
 
 [project.scripts]

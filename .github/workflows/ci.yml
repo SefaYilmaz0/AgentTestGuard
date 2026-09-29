@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install TestGuard locally
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Run test suite
+        run: |
+          python -m unittest discover -s tests -p "test_*.py" -v
+
+      - name: Run TestGuard Self-Check
+        run: |
+          testguard check --base HEAD --format markdown

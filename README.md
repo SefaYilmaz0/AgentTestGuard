@@ -4,7 +4,7 @@
 
 **The Zero-Trust Anti-Cheat Gate for AI-Generated Code.**
 
-[![Tests](https://img.shields.io/badge/tests-48%2F48%20passing-brightgreen)](#)
+[![Tests](https://img.shields.io/badge/tests-52%2F52%20passing-brightgreen)](#)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](#)
 [![Dependencies](https://img.shields.io/badge/dependencies-0%20(stdlib%20only)-success)](#)
 [![Performance](https://img.shields.io/badge/speed-%3C5ms%20AST%20diff-orange)](#)
@@ -89,7 +89,32 @@ TestGuard runs as a zero-dependency **CLI tool** and **GitHub Action** providing
 
 ## 🚀 Quickstart
 
-### Installation
+### Option A: Use as GitHub Action in CI/CD (Recommended)
+
+Add TestGuard as a mandatory status check in `.github/workflows/testguard.yml`:
+
+```yaml
+name: TestGuard Anti-Cheat Gate
+
+on:
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify AI Code Integrity
+        uses: SefaYilmaz0/AgentTestGuard@v1
+        with:
+          base: ${{ github.base_ref || 'main' }}
+```
+
+### Option B: Local CLI Usage
 
 TestGuard requires **zero external third-party dependencies** (Python standard library only):
 
@@ -99,7 +124,7 @@ cd AgentTestGuard
 pip install -e .
 ```
 
-### CLI Usage
+Run cheat detection against your base branch:
 
 ```bash
 # Run cheat detection against base branch (default: HEAD / origin/main)
@@ -123,29 +148,42 @@ testguard check --base origin/main --format json
 | **Runtime Dependencies** | **0** (pure Python standard library: `ast`, `dataclasses`, `subprocess`, `argparse`) |
 | **AST Analysis Speed** | **< 5ms** per test suite (deterministic, zero LLM calls) |
 | **Python Support** | Python 3.10+ (supports modern pattern matching `ast.Match`, `ast.IfExp`, etc.) |
-| **Cross-Platform** | Linux, macOS, Windows (native path normalization) |
-| **Test Suite** | 48/48 comprehensive unit & integration tests |
+| **Cross-Platform** | Linux, macOS, Windows (native path & stream encoding handling) |
+| **Test Suite** | 52/52 comprehensive unit, integration & synthetic cheat scenario tests |
 
 ---
 
 ## 🗺️ Roadmap
 
-- [x] **Faz 1: Çekirdek Hile Tespit Motoru**
+- [x] **Faz 1: Çekirdek Hile Tespit Motoru (Core Engine)**
   - [x] AST diffing for assertion drops across test functions & classes
   - [x] Detection of `@pytest.mark.skip`, `@unittest.skip`, and variants
   - [x] Exception swallowing detection (`pass`, `return` in `except`)
   - [x] Anti-hardcode literal matcher (supporting `if`, `match/case`, ternary `IfExp`)
   - [x] Git shadow diff extraction & base branch test isolation
   - [x] Deterministic CLI runner with `PASS` / `VETO` exit codes
-- [ ] **Faz 2: Test Odaklı Doğrulama (Self-Testing Scenarios)**
-  - [ ] Synthetic AI cheat suites (dropped assert, skip injection, hardcode bypass)
-  - [ ] Automated regression tests against realistic AI PRs
-- [ ] **Faz 3: GitHub Action & Vitrin Dağıtımı**
-  - [ ] GitHub Action packaging (`uses: SefaYilmaz0/AgentTestGuard@v1`)
-  - [ ] Automated PR comment bot & status check integration
+- [x] **Faz 2: Test Odaklı Doğrulama (Self-Testing Scenarios)**
+  - [x] Synthetic AI cheat suites (dropped assert, skip injection, hardcode bypass, clean PR pass)
+  - [x] Comprehensive end-to-end Git test fixtures (52 tests passed)
+- [ ] **Faz 3: GitHub Action & Dağıtım**
+  - [x] GitHub Action composite definition (`action.yml`)
+  - [x] CI/CD multi-version matrix test workflow
+  - [ ] GitHub Marketplace publication (`v1` release tag)
   - [ ] PyPI distribution (`pip install testguard-ai`)
 
 ---
+
+## 🏢 Enterprise & Private Repositories
+
+TestGuard is **100% free and open-source forever** for public repositories.
+
+For private company repositories requiring team-wide analytics, Slack/Discord alerts, audit logs, or centralized rule enforcement, enterprise plans will be available via GitHub Marketplace.
+
+---
+
+## 💖 Community & Contributing
+
+Feedback, bug reports, and contributions are welcome! Feel free to open an issue or pull request.
 
 ## 📄 License
 

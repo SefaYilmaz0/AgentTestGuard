@@ -1,0 +1,68 @@
+name: "TestGuard Anti-Cheat Gate"
+description: "The Zero-Trust Anti-Cheat Gate for AI-Generated Code. Prevents test skipping, assertion dropping, and hardcoding."
+author: "Sefa Yılmaz"
+branding:
+  icon: "shield"
+  color: "green"
+
+inputs:
+  base:
+    description: "Base git ref or branch to compare against"
+    required: false
+    default: "origin/main"
+  format:
+    description: "Output format (text, json, markdown)"
+    required: false
+    default: "markdown"
+  cwd:
+    description: "Working directory"
+    required: false
+    default: "."
+
+outputs:
+  verdict:
+    description: "Verdict result: PASS or VETO"
+    value: ${{ steps.testguard-run.outputs.verdict }}
+  violations-count:
+    description: "Number of cheating violations detected"
+    value: ${{ steps.testguard-run.outputs.violations_count }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Install TestGuard
+      shell: bash
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install -e "${{ github.action_path }}"
+
+    - name: Run TestGuard Verification
+      id: testguard-run
+      shell: bash
+      run: |
+        git fetch origin ${{ inputs.base }} --depth=1 || true
+        set +e
+        OUTPUT=$(testguard check --base "${{ inputs.base }}" --format "${{ inputs.format }}" --cwd "${{ inputs.cwd }}")
+        EXIT_CODE=$?
+        set -e
+
+        echo "$OUTPUT"
+        
+        if [ $EXIT_CODE -eq 0 ]; then
+          echo "verdict=PASS" >> "$GITHUB_OUTPUT"
+          echo "violations_count=0" >> "$GITHUB_OUTPUT"
+          echo "### 🛡️ TestGuard Verification Passed" >> "$GITHUB_STEP_SUMMARY"
+          echo "$OUTPUT" >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        else
+          echo "verdict=VETO" >> "$GITHUB_OUTPUT"
+          echo "violations_count=1" >> "$GITHUB_OUTPUT"
+          echo "### 🚨 TestGuard Verification Failed (VETO)" >> "$GITHUB_STEP_SUMMARY"
+          echo "$OUTPUT" >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+        fi
