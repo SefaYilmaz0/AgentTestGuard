@@ -26,6 +26,11 @@ def main(argv: Optional[list[str]] = None) -> int:
             sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         except Exception:
             pass
+    if hasattr(sys.stderr, "reconfigure"):
+        try:
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument(
@@ -54,7 +59,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     report = evaluate_changes(base_ref=args.base, cwd=args.cwd)
 
     if args.format == "json":
-        _safe_print(json.dumps(report.to_dict(), indent=2))
+        _safe_print(json.dumps(report.to_dict(), indent=2, ensure_ascii=False))
     elif args.format == "markdown":
         _safe_print(format_markdown_report(report))
     else:
