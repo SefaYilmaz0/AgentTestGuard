@@ -87,5 +87,40 @@ class TestShadowRunner(unittest.TestCase):
             content = get_file_content_at_ref("HEAD", "file.py", cwd=tmpdir)
             self.assertIsNone(content)
 
+    def test_get_changed_files_includes_untracked_files(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            subprocess.run(["git", "init"], cwd=tmpdir, check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "TestUser"], cwd=tmpdir, check=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmpdir, check=True)
+
+            tracked_file = os.path.join(tmpdir, "tracked.py")
+            with open(tracked_file, "w", encoding="utf-8") as f:
+                f.write("tracked = True\n")
+            gitignore_file = os.path.join(tmpdir, ".gitignore")
+            with open(gitignore_file, "w", encoding="utf-8") as f:
+                f.write("*.log\n")
+
+            subprocess.run(["git", "add", "."], cwd=tmpdir, check=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=tmpdir, check=True)
+
+            # Modify tracked file
+            with open(tracked_file, "w", encoding="utf-8") as f:
+                f.write("tracked = False\n")
+
+            # Create an untracked file (not added to git)
+            untracked_file = os.path.join(tmpdir, "untracked.py")
+            with open(untracked_file, "w", encoding="utf-8") as f:
+                f.write("untracked = True\n")
+
+            # Create an ignored file
+            ignored_file = os.path.join(tmpdir, "debug.log")
+            with open(ignored_file, "w", encoding="utf-8") as f:
+                f.write("log data\n")
+
+            changed = get_changed_files("HEAD", cwd=tmpdir)
+            self.assertIn("tracked.py", changed)
+            self.assertIn("untracked.py", changed)
+            self.assertNotIn("debug.log", changed)
+
 if __name__ == "__main__":
     unittest.main()

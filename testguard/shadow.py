@@ -50,11 +50,24 @@ def is_test_file(path: str) -> bool:
 
 
 def get_changed_files(base_ref: str, cwd: str = ".") -> list[str]:
-    """Retrieve list of files changed between base_ref and working tree.
+    """Retrieve list of files changed between base_ref and working tree,
+    including untracked files in the working tree.
     
     Falls back to diff against HEAD if base_ref is invalid or unavailable.
-    Returns normalized forward-slash paths.
+    Returns normalized forward-slash paths preserving uniqueness and order.
     """
+    changed: list[str] = []
+    seen: set[str] = set()
+
+    def add_path(p: str) -> None:
+        norm = p.strip().replace("\\", "/")
+        if norm.startswith("./"):
+            norm = norm[2:]
+        if norm and norm not in seen:
+            seen.add(norm)
+            changed.append(norm)
+
+    # 1. Tracked modified / added files from git diff
     try:
         cmd = ["git", "diff", "--name-only", base_ref]
         res = subprocess.run(
@@ -66,11 +79,25 @@ def get_changed_files(base_ref: str, cwd: str = ".") -> list[str]:
             res = subprocess.run(
                 cmd, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace"
             )
-            if res.returncode != 0:
-                return []
-        return [line.strip().replace("\\", "/") for line in res.stdout.splitlines() if line.strip()]
+        if res.returncode == 0:
+            for line in res.stdout.splitlines():
+                add_path(line)
     except (subprocess.SubprocessError, FileNotFoundError, OSError):
-        return []
+        pass
+
+    # 2. Untracked files in working tree (excluding standard ignored files)
+    try:
+        cmd = ["git", "ls-files", "--others", "--exclude-standard"]
+        res = subprocess.run(
+            cmd, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace"
+        )
+        if res.returncode == 0:
+            for line in res.stdout.splitlines():
+                add_path(line)
+    except (subprocess.SubprocessError, FileNotFoundError, OSError):
+        pass
+
+    return changed
 
 
 def get_file_content_at_ref(ref: str, file_path: str, cwd: str = ".") -> Optional[str]:
