@@ -77,16 +77,20 @@ GitHub PR açıldığında otomatik bir bot yorumu ve status check bırakır:
 ## 6. Model İçin Hemen Başlanacak Yol Haritası (TODO List)
 
 ### Faz 1: Çekirdek Hile Tespit Motoru (Core Engine)
-- [ ] TestGuard CLI projesini başlat (klasör yapısı, pyproject.toml veya package.json).
-- [ ] `Shadow Runner` modülünü yaz: Git diff'i analiz edip test dosyalarını base branch'ten izole eden mekanizma.
-- [ ] `AST Diff` modülünü yaz: Python ve JS/TS test dosyalarındaki assertion eksilmelerini ve skip decorator'larını algılayan kontrolcü.
-- [ ] `Anti-Hardcode` heuristiğini yaz: Test girdilerinin fonksiyonda hardcode edilmesini yakalayan parser.
+- [x] TestGuard CLI projesini başlat (klasör yapısı, pyproject.toml veya package.json).
+- [x] `Shadow Runner` modülünü yaz: Git diff'i analiz edip test dosyalarını base branch'ten izole eden mekanizma.
+- [x] `AST Diff` modülünü yaz: Python ve JS/TS test dosyalarındaki assertion eksilmelerini ve skip decorator'larını algılayan kontrolcü.
+- [x] `Anti-Hardcode` heuristiğini yaz: Test girdilerinin fonksiyonda hardcode edilmesini yakalayan parser.
 
-### Faz 2: Test Odaklı Doğrulama (Self-Testing)
-- [ ] 3 farklı sahte hileli test senaryosu hazırla (birinde assertion silinmiş, birinde skip atılmış, birinde hardcode yapılmış).
-- [ ] TestGuard'ın bu 3 hileyi de hatasız yakalayıp VETO verdiğini doğrula.
+### Faz 2: Test Odaklı Doğrulama ve Genişletme (Self-Testing & Safeguards)
+- [x] 3 farklı sahte hileli test senaryosu hazırla (birinde assertion silinmiş, birinde skip atılmış, birinde hardcode yapılmış).
+- [x] TestGuard'ın bu 3 hileyi de hatasız yakalayıp VETO verdiğini doğrula (97/97 test).
+- [x] Çoklu dil desteği: Vitest, Jest, Playwright, Mocha regex tokenizer.
+- [x] Zero-config CLI setup (`testguard init --hook claude|git|all`).
+- [x] Proje konfigürasyon desteği (`.testguard.json` ve `pyproject.toml`).
 
 ### Faz 3: Dağıtım ve Açık Kaynak Vitrini
-- [ ] GitHub Action YAML sarmalayıcısını hazırla (`action.yml`).
-- [ ] Geliştiricileri ve şirketleri etkileyecek, şovdan uzak, teknik olarak kusursuz bir `README.md` yaz.
-- [ ] GitHub Marketplace ve paket yöneticilerine (PyPI/npm) yayınlama yapılandırmasını tamamla.
+- [x] GitHub Action composite tanımını hazırla (`action.yml`).
+- [x] Geliştiricileri ve şirketleri etkileyecek, şovdan uzak, teknik olarak kusursuz bir `README.md` yaz.
+- [x] GitHub Marketplace ve paket yöneticilerine yayınlama yapılandırmasını tamamla (`release.yml`, `ci.yml`).
+- [x] Resmi `v0.2.0` ve `v1` release dağıtımını gerçekleştir.
