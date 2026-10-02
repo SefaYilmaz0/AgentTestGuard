@@ -9,6 +9,30 @@ import subprocess
 from typing import Optional
 
 
+class BaseRefError(Exception):
+    """Raised when the base ref cannot be resolved to a commit.
+
+    Comparing against an unresolvable ref would silently diff nothing and pass,
+    so the gate must fail closed instead.
+    """
+
+
+def ensure_base_ref(base_ref: str, cwd: str = ".") -> None:
+    """Raise BaseRefError unless base_ref resolves to a commit in the repo at cwd."""
+    try:
+        res = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", f"{base_ref}^{{commit}}"],
+            cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+    except (subprocess.SubprocessError, FileNotFoundError, OSError) as exc:
+        raise BaseRefError(f"Cannot run git to resolve base ref '{base_ref}': {exc}") from exc
+    if res.returncode != 0:
+        raise BaseRefError(
+            f"Base ref '{base_ref}' could not be resolved to a commit in '{cwd}'. "
+            "Fetch it first (e.g. `git fetch origin <branch>`) or pass a valid --base."
+        )
+
+
 def is_test_file(path: str) -> bool:
     """Determine whether a given file path is a test file.
     
@@ -53,9 +77,10 @@ def get_changed_files(base_ref: str, cwd: str = ".") -> list[str]:
     """Retrieve list of files changed between base_ref and working tree,
     including untracked files in the working tree.
     
-    Falls back to diff against HEAD if base_ref is invalid or unavailable.
+    Raises BaseRefError if base_ref cannot be resolved (fail closed).
     Returns normalized forward-slash paths preserving uniqueness and order.
     """
+    ensure_base_ref(base_ref, cwd=cwd)
     changed: list[str] = []
     seen: set[str] = set()
 
@@ -74,14 +99,9 @@ def get_changed_files(base_ref: str, cwd: str = ".") -> list[str]:
             cmd, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace"
         )
         if res.returncode != 0:
-            # Fallback to diff against HEAD if base_ref fails
-            cmd = ["git", "diff", "--name-only", "HEAD"]
-            res = subprocess.run(
-                cmd, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace"
-            )
-        if res.returncode == 0:
-            for line in res.stdout.splitlines():
-                add_path(line)
+            raise BaseRefError(f"git diff against '{base_ref}' failed: {res.stderr.strip()}")
+        for line in res.stdout.splitlines():
+            add_path(line)
     except (subprocess.SubprocessError, FileNotFoundError, OSError):
         pass
 

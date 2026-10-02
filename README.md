@@ -157,6 +157,7 @@ testguard check --base origin/main --format json
 ### Exit Codes
 - `0`: **PASS** — Clean PR, no cheating patterns detected.
 - `1`: **VETO** — Goal gaming detected, CI / commit / hook blocked.
+- `2`: **ERROR** — Base ref could not be resolved (fail closed; never a silent PASS).
 
 ---
 

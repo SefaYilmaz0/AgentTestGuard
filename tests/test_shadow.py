@@ -2,7 +2,8 @@ import unittest
 import os
 import subprocess
 import tempfile
-from testguard.shadow import is_test_file, get_changed_files, get_file_content_at_ref
+from testguard.cli import main
+from testguard.shadow import BaseRefError, is_test_file, get_changed_files, get_file_content_at_ref
 
 class TestShadowRunner(unittest.TestCase):
     def test_is_test_file(self):
@@ -81,11 +82,24 @@ class TestShadowRunner(unittest.TestCase):
     def test_git_operations_fallback_and_errors(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             # Not a git repo
-            changed = get_changed_files("HEAD", cwd=tmpdir)
-            self.assertEqual(changed, [])
+            with self.assertRaises(BaseRefError):
+                get_changed_files("HEAD", cwd=tmpdir)
             
             content = get_file_content_at_ref("HEAD", "file.py", cwd=tmpdir)
             self.assertIsNone(content)
+
+    def test_invalid_base_ref_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            subprocess.run(["git", "init"], cwd=tmpdir, check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "T"], cwd=tmpdir, check=True)
+            subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=tmpdir, check=True)
+            with open(os.path.join(tmpdir, "a.py"), "w", encoding="utf-8") as f:
+                f.write("a = 1\n")
+            subprocess.run(["git", "add", "."], cwd=tmpdir, check=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=tmpdir, check=True, capture_output=True)
+            with self.assertRaises(BaseRefError):
+                get_changed_files("origin/nonexistent", cwd=tmpdir)
+            self.assertEqual(main(["check", "--base", "origin/nonexistent", "--cwd", tmpdir]), 2)
 
     def test_get_changed_files_includes_untracked_files(self):
         with tempfile.TemporaryDirectory() as tmpdir:

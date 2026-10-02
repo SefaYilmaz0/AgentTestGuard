@@ -10,6 +10,7 @@ import sys
 from typing import Optional
 
 from testguard.config import load_config
+from testguard.shadow import BaseRefError
 from testguard.installer import install_claude_hook, install_git_hook
 from testguard.verdict import evaluate_changes, format_markdown_report
 
@@ -101,7 +102,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 0 if success else 1
 
     config = load_config(cwd=args.cwd, config_path=args.config)
-    report = evaluate_changes(base_ref=args.base, cwd=args.cwd, config=config)
+    try:
+        report = evaluate_changes(base_ref=args.base, cwd=args.cwd, config=config)
+    except BaseRefError as exc:
+        print(f"TestGuard error: {exc}", file=sys.stderr)
+        return 2
 
     if args.format == "json":
         _safe_print(json.dumps(report.to_dict(), indent=2, ensure_ascii=False))
