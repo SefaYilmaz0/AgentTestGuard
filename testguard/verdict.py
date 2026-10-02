@@ -24,6 +24,17 @@ from testguard.shadow_runner import run_shadow_tests
 from testguard.shadow import get_changed_files, get_file_content_at_ref, get_renamed_files, is_test_file
 
 
+def _mark_file_deleted(violations: list[Violation], file_path: str) -> None:
+    """Make clear the tests vanished because their file is gone, not edited in place."""
+    for v in violations:
+        v.details["file_deleted"] = True
+        if v.message.endswith("was removed entirely"):
+            v.message = (
+                f"{v.message[:-len('was removed entirely')]}was removed: "
+                f"its file '{file_path}' no longer exists (deleted, or moved without a trackable rename)"
+            )
+
+
 def evaluate_changes(
     base_ref: str = "HEAD",
     cwd: str = ".",
@@ -71,9 +82,13 @@ def evaluate_changes(
             base_content = get_file_content_at_ref(base_ref, renames.get(test_file, test_file), cwd=cwd)
             if base_content is not None:
                 if is_py:
-                    violations.extend(analyze_ast_diff(base_content, "", file_path=test_file))
+                    deleted = analyze_ast_diff(base_content, "", file_path=test_file)
+                    _mark_file_deleted(deleted, test_file)
+                    violations.extend(deleted)
                 elif is_js:
-                    violations.extend(analyze_js_test_diff(base_content, "", file_path=test_file))
+                    deleted = analyze_js_test_diff(base_content, "", file_path=test_file)
+                    _mark_file_deleted(deleted, test_file)
+                    violations.extend(deleted)
             continue
 
         with open(full_path, "r", encoding="utf-8", errors="ignore") as f:

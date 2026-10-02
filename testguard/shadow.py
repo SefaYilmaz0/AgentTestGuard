@@ -90,7 +90,7 @@ def get_changed_files(base_ref: str, cwd: str = ".") -> list[str]:
 
     # 1. Tracked modified / added files from git diff
     try:
-        cmd = ["git", "diff", "--name-only", base_ref]
+        cmd = ["git", "diff", "--name-only", "-M20%", base_ref]
         res = subprocess.run(
             cmd, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace"
         )
@@ -122,7 +122,7 @@ def get_renamed_files(base_ref: str, cwd: str = ".") -> dict[str, str]:
     renames: dict[str, str] = {}
     try:
         res = subprocess.run(
-            ["git", "diff", "--name-status", "-M", "-z", base_ref],
+            ["git", "diff", "--name-status", "-M20%", "-z", base_ref],
             cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
     except (subprocess.SubprocessError, FileNotFoundError, OSError):

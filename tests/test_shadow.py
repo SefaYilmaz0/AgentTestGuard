@@ -176,3 +176,41 @@ class TestTestFileDetectionAndRenames(unittest.TestCase):
             with open(os.path.join(d, "checks/a.py"), "w") as fh:
                 fh.write("def test_a():\n    assert f(1) == 11\n")
             self.assertEqual(main(["check", "--base", "HEAD", "--cwd", d]), 1)
+
+    def test_small_rename_with_removed_assertion_reports_decrease_not_removal(self):
+        with tempfile.TemporaryDirectory() as d:
+            def git(*a):
+                subprocess.run(["git", *a], cwd=d, check=True, capture_output=True)
+            git("init"); git("config", "user.name", "T"); git("config", "user.email", "t@e.com")
+            os.makedirs(os.path.join(d, "tests"))
+            with open(os.path.join(d, "tests/test_app.py"), "w") as fh:
+                fh.write("from app import f\ndef test_f():\n    assert f(21) == 42\n    assert f(2) == 4\n")
+            git("add", "."); git("commit", "-m", "base")
+            git("mv", "tests/test_app.py", "tests/test_renamed.py")
+            with open(os.path.join(d, "tests/test_renamed.py"), "w") as fh:
+                fh.write("def test_f():\n    assert f(21) == 42\n")
+            git("add", ".")
+            import io, json
+            from unittest.mock import patch
+            buf = io.StringIO()
+            with patch("sys.stdout", buf):
+                self.assertEqual(main(["check", "--base", "HEAD", "--cwd", d, "--format", "json"]), 1)
+            msgs = [v["message"] for v in json.loads(buf.getvalue())["violations"]]
+            self.assertTrue(any("decreased" in m for m in msgs), msgs)
+            self.assertFalse(any("removed entirely" in m for m in msgs), msgs)
+
+    def test_deleted_test_file_message_says_file_is_gone(self):
+        with tempfile.TemporaryDirectory() as d:
+            def git(*a):
+                subprocess.run(["git", *a], cwd=d, check=True, capture_output=True)
+            git("init"); git("config", "user.name", "T"); git("config", "user.email", "t@e.com")
+            os.makedirs(os.path.join(d, "tests"))
+            with open(os.path.join(d, "tests/test_app.py"), "w") as fh:
+                fh.write("def test_f():\n    assert f(1) == 11\n")
+            git("add", "."); git("commit", "-m", "base")
+            os.remove(os.path.join(d, "tests/test_app.py"))
+            from testguard.verdict import evaluate_changes
+            vios = evaluate_changes("HEAD", cwd=d).violations
+            self.assertEqual(len(vios), 1)
+            self.assertIn("no longer exists", vios[0].message)
+            self.assertTrue(vios[0].details["file_deleted"])
