@@ -47,6 +47,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         "--config", default=None, help="Path to configuration file (.testguard.json or pyproject.toml)"
     )
 
+    common.add_argument(
+        "--shadow-run",
+        action="store_true",
+        help="Also run the base branch's tests against the modified sources (Shadow Test Runner)",
+    )
+
     parser = argparse.ArgumentParser(
         prog="testguard",
         description="The Zero-Trust Anti-Cheat Gate for AI-Generated Code.",
@@ -102,6 +108,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 0 if success else 1
 
     config = load_config(cwd=args.cwd, config_path=args.config)
+    if args.shadow_run:
+        config.shadow_run = True
     try:
         report = evaluate_changes(base_ref=args.base, cwd=args.cwd, config=config)
     except BaseRefError as exc:
@@ -123,6 +131,10 @@ def main(argv: Optional[list[str]] = None) -> int:
             for v in report.violations:
                 loc = f"{v.file_path}:{v.line_number}" if v.line_number else v.file_path
                 _safe_print(f"   - [{v.type.value}] {loc}: {v.message}")
+                tail = v.details.get("output_tail")
+                if tail:
+                    for line in tail.splitlines()[-15:]:
+                        _safe_print(f"       | {line}")
 
     return 0 if report.is_passed else 1
 

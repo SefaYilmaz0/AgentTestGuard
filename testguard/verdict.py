@@ -19,6 +19,7 @@ from testguard.js_diff import (
 )
 from testguard.config import TestGuardConfig, is_file_excluded, load_config
 from testguard.models import Report, Verdict, Violation
+from testguard.shadow_runner import run_shadow_tests
 from testguard.shadow import get_changed_files, get_file_content_at_ref, is_test_file
 
 
@@ -129,6 +130,9 @@ def evaluate_changes(
         with open(full_path, "r", encoding="utf-8", errors="ignore") as f:
             src_content = f.read()
         violations.extend(detect_hardcoded_cheats(src_content, collected_literals, file_path=src_file))
+
+    if config.shadow_run:
+        violations.extend(run_shadow_tests(base_ref, cwd=cwd, config=config))
 
     elapsed_ms = (time.perf_counter() - start_time) * 1000.0
     verdict = Verdict.VETO if violations else Verdict.PASS

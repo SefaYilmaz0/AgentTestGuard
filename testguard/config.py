@@ -22,9 +22,14 @@ except ImportError:
 
 @dataclass
 class TestGuardConfig:
+    __test__ = False  # not a pytest test class
+
     exclude_patterns: list[str] = field(default_factory=list)
     literal_whitelist: set = field(default_factory=set)
     base_ref: Optional[str] = None
+    shadow_run: bool = False
+    shadow_command: Optional[str] = None
+    shadow_timeout: int = 300
 
     def __post_init__(self) -> None:
         if not isinstance(self.exclude_patterns, list):
@@ -73,10 +78,22 @@ def _parse_dict_to_config(data: dict[str, Any]) -> TestGuardConfig:
     if base_ref is not None:
         base_ref = str(base_ref)
 
+    shadow_command = data.get("shadow_command")
+    shadow_command = str(shadow_command) if shadow_command else None
+    try:
+        shadow_timeout = int(data.get("shadow_timeout", 300))
+        if shadow_timeout <= 0:
+            shadow_timeout = 300
+    except (TypeError, ValueError):
+        shadow_timeout = 300
+
     return TestGuardConfig(
         exclude_patterns=exclude_patterns,
         literal_whitelist=literal_whitelist,
         base_ref=base_ref,
+        shadow_run=data.get("shadow_run") is True,
+        shadow_command=shadow_command,
+        shadow_timeout=shadow_timeout,
     )
 
 
