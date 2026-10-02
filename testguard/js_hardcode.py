@@ -192,6 +192,41 @@ def _violation(file_path: str, line: int, func: str, matched: list[Any], kind: s
     )
 
 
+def _inline_constant_aliases(toks: list[JsToken]) -> list[JsToken]:
+    """Replace single-assignment `const NAME = <literal>;` identifiers by their literal."""
+    declared: dict[str, JsToken] = {}
+    assign_count: dict[str, int] = {}
+    for i, t in enumerate(toks):
+        if t.type != "IDENT" or i + 1 >= len(toks) or toks[i + 1].value not in ("=", "+=", "-=", "*=", "/="):
+            continue
+        if i > 0 and toks[i - 1].value == ".":
+            continue
+        assign_count[t.value] = assign_count.get(t.value, 0) + 1
+        if (
+            toks[i + 1].value == "="
+            and i + 2 < len(toks)
+            and _literal(toks[i + 2]) is not None
+            and (i + 3 >= len(toks) or toks[i + 3].value in (";", ",") or toks[i + 3].line_no != toks[i + 2].line_no)
+        ):
+            declared[t.value] = toks[i + 2]
+    aliases = {n: lit for n, lit in declared.items() if assign_count.get(n) == 1}
+    if not aliases:
+        return toks
+    out: list[JsToken] = []
+    for i, t in enumerate(toks):
+        is_ref = (
+            t.type == "IDENT" and t.value in aliases
+            and not (i > 0 and toks[i - 1].value == ".")
+            and not (i + 1 < len(toks) and toks[i + 1].value in ("=", ":"))
+        )
+        if is_ref:
+            lit = aliases[t.value]
+            out.append(JsToken(type=lit.type, value=lit.value, line_no=t.line_no, col=t.col))
+        else:
+            out.append(t)
+    return out
+
+
 def detect_js_hardcoded_cheats(src_code: str, test_literals: set[Any], file_path: str = "") -> list[Violation]:
     """Analyze JS/TS source for branches / tables that hardcode test literals."""
     if not test_literals:
@@ -200,6 +235,7 @@ def detect_js_hardcoded_cheats(src_code: str, test_literals: set[Any], file_path
         t for t in _tokenize(src_code)
         if t.type not in ("WS", "NEWLINE", "COMMENT_LINE", "COMMENT_BLOCK")
     ]
+    toks = _inline_constant_aliases(toks)
     funcs = _function_names(toks)
     violations: list[Violation] = []
     seen: set[tuple[int, str]] = set()

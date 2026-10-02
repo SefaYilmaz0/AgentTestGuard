@@ -45,6 +45,13 @@ class TestJsHardcode(unittest.TestCase):
         self.assertEqual(len(detect('function g(u) { return ({ "user_123": "ok", other: "no" })[u]; }')), 1)
         self.assertEqual(len(detect('const TABLE = { user_123: "ok" };\nfunction g(u) { return TABLE[u]; }')), 1)
 
+    def test_constant_alias(self):
+        v = detect('const SECRET = "user_123";\nfunction g(u) {\n  if (u === SECRET) { return 42; }\n  return h(u);\n}\n')
+        self.assertEqual(len(v), 1)
+        self.assertEqual(v[0].line_number, 3)
+        # reassigned name is not a constant alias
+        self.assertEqual(detect('let SECRET = "user_123";\nSECRET = load();\nfunction g(u) { if (u === SECRET) { return 42; } return h(u); }'), [])
+
     def test_clean_code_not_flagged(self):
         clean = [
             'function g(u) { if (u === "user_123") { return lookup(u); } return h(u); }',

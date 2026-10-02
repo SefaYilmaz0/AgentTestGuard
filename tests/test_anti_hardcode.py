@@ -215,3 +215,19 @@ class TestAntiHardcodeBypasses(unittest.TestCase):
     def test_unused_or_non_matching_dict_is_clean(self):
         self.assertEqual(detect_hardcoded_cheats('CFG = {"user_123": "x"}\ndef f():\n    return CFG\n', self.LITS, "a.py"), [])
         self.assertEqual(detect_hardcoded_cheats('def f(u):\n    return {"other_key": "x"}[u]\n', self.LITS, "a.py"), [])
+
+
+class TestAntiHardcodeAliases(unittest.TestCase):
+    LITS = {"user_123", "session_xyz"}
+
+    def test_constant_alias_in_condition(self):
+        src = 'SECRET = "user_123"\ndef f(u):\n    if u == SECRET:\n        return "session_xyz"\n    return real(u)\n'
+        self.assertEqual(len(detect_hardcoded_cheats(src, self.LITS, "a.py")), 1)
+
+    def test_return_alias(self):
+        src = 'TOKEN = "abcdef"\ndef f(u):\n    if u == "user_123":\n        return TOKEN\n    return real(u)\n'
+        self.assertEqual(len(detect_hardcoded_cheats(src, self.LITS, "a.py")), 1)
+
+    def test_reassigned_name_is_not_alias(self):
+        src = 'SECRET = "user_123"\nSECRET = load()\ndef f(u):\n    if u == SECRET:\n        return "session_xyz"\n    return real(u)\n'
+        self.assertEqual(detect_hardcoded_cheats(src, self.LITS, "a.py"), [])
