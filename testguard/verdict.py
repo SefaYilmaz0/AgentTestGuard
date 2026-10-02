@@ -21,7 +21,7 @@ from testguard.js_diff import (
 from testguard.config import TestGuardConfig, is_file_excluded, load_config
 from testguard.models import Report, Verdict, Violation
 from testguard.shadow_runner import run_shadow_tests
-from testguard.shadow import get_changed_files, get_file_content_at_ref, is_test_file
+from testguard.shadow import get_changed_files, get_file_content_at_ref, get_renamed_files, is_test_file
 
 
 def evaluate_changes(
@@ -46,10 +46,15 @@ def evaluate_changes(
     changed_files = get_changed_files(base_ref, cwd=cwd)
     if config.exclude_patterns:
         changed_files = [f for f in changed_files if not is_file_excluded(f, config.exclude_patterns)]
-    test_files = [f for f in changed_files if is_test_file(f)]
+    renames = get_renamed_files(base_ref, cwd=cwd)
+    # A test moved to a non-test-looking path is still a test (compared against its old content).
+    def _is_test(f: str) -> bool:
+        return is_test_file(f) or (f in renames and is_test_file(renames[f]))
+
+    test_files = [f for f in changed_files if _is_test(f)]
     src_files = [
         f for f in changed_files
-        if not is_test_file(f)
+        if not _is_test(f)
         and (f.endswith(".py") or (f.endswith(JS_TS_EXTENSIONS) and not f.endswith(".d.ts")))
     ]
 
@@ -63,7 +68,7 @@ def evaluate_changes(
 
         full_path = os.path.join(cwd, test_file)
         if not os.path.exists(full_path):
-            base_content = get_file_content_at_ref(base_ref, test_file, cwd=cwd)
+            base_content = get_file_content_at_ref(base_ref, renames.get(test_file, test_file), cwd=cwd)
             if base_content is not None:
                 if is_py:
                     violations.extend(analyze_ast_diff(base_content, "", file_path=test_file))
@@ -74,7 +79,7 @@ def evaluate_changes(
         with open(full_path, "r", encoding="utf-8", errors="ignore") as f:
             head_content = f.read()
 
-        base_content = get_file_content_at_ref(base_ref, test_file, cwd=cwd)
+        base_content = get_file_content_at_ref(base_ref, renames.get(test_file, test_file), cwd=cwd)
 
         if is_py:
             collected_literals.update(extract_test_literals(head_content))

@@ -139,3 +139,40 @@ class TestShadowRunner(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTestFileDetectionAndRenames(unittest.TestCase):
+    def test_extended_test_file_patterns(self):
+        for p in [
+            "conftest.py", "pkg/conftest.py", "tests.py", "pkg/foo_tests.py",
+            "src/a.test.mjs", "src/a.spec.cjs", "src/a.test.mts", "src/a.spec.cts",
+            "src/a.e2e-spec.ts", "cypress/login.cy.ts", "src/a.e2e.ts",
+            "spec/helpers.js", "app/specs/x.ts", "e2e/login.ts", "src/__mocks__/api.ts",
+            "./tests/test_a.py",
+        ]:
+            self.assertTrue(is_test_file(p), p)
+
+    def test_non_test_files_not_matched(self):
+        for p in ["src/auth.py", "src/contest.py", "src/latest.py", "src/inspector.ts",
+                  "src/testing_utils.py", "docs/spec_notes.md", "src/a.testing.ts"]:
+            self.assertFalse(is_test_file(p), p)
+
+    def test_renamed_test_is_compared_with_old_content(self):
+        with tempfile.TemporaryDirectory() as d:
+            def git(*a):
+                subprocess.run(["git", *a], cwd=d, check=True, capture_output=True)
+            git("init"); git("config", "user.name", "T"); git("config", "user.email", "t@e.com")
+            os.makedirs(os.path.join(d, "tests"))
+            body = "def test_a():\n    assert f(1) == 11\n    assert f(2) == 22\n"
+            with open(os.path.join(d, "tests/test_a.py"), "w") as fh:
+                fh.write(body)
+            git("add", "."); git("commit", "-m", "base")
+            # pure rename inside tests: clean
+            git("mv", "tests/test_a.py", "tests/test_b.py")
+            self.assertEqual(main(["check", "--base", "HEAD", "--cwd", d]), 0)
+            # move out of the test dirs and drop an assertion: must still be caught
+            os.makedirs(os.path.join(d, "checks"))
+            git("mv", "tests/test_b.py", "checks/a.py")
+            with open(os.path.join(d, "checks/a.py"), "w") as fh:
+                fh.write("def test_a():\n    assert f(1) == 11\n")
+            self.assertEqual(main(["check", "--base", "HEAD", "--cwd", d]), 1)

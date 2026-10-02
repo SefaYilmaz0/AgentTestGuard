@@ -33,43 +33,39 @@ def ensure_base_ref(base_ref: str, cwd: str = ".") -> None:
         )
 
 
+_TEST_DIRS = ("tests", "test", "__tests__", "spec", "specs", "e2e", "__mocks__")
+
+_TEST_SUFFIXES = tuple(
+    f".{kind}.{ext}"
+    for kind in ("test", "spec", "e2e", "e2e-spec", "cy")
+    for ext in ("js", "ts", "jsx", "tsx", "mjs", "cjs", "mts", "cts")
+) + ("_test.py", ".test.py", "_tests.py")
+
+_TEST_BASENAMES = ("conftest.py", "tests.py")
+
+
 def is_test_file(path: str) -> bool:
     """Determine whether a given file path is a test file.
-    
+
     Detects Python, JS/TS, and general test file conventions:
-    - Directories: tests/, test/, __tests__/
-    - Basenames: test_*, *_test.py, *.test.[jt]sx?, *.spec.[jt]sx?
+    - Directories: tests/, test/, __tests__/, spec/, specs/, e2e/, __mocks__/ (at any depth)
+    - Python: test_*.py, *_test.py, *_tests.py, tests.py, conftest.py
+    - JS/TS: *.test|spec|e2e|e2e-spec|cy.[jt]sx? and the m/c variants (.mjs .cjs .mts .cts)
     """
     normalized = path.replace("\\", "/").lower()
-    basename = os.path.basename(normalized)
+    if normalized.startswith("./"):
+        normalized = normalized[2:]
+    parts = [p for p in normalized.split("/") if p]
+    if not parts:
+        return False
+    basename = parts[-1]
 
-    in_test_dir = (
-        "/tests/" in normalized
-        or "/test/" in normalized
-        or "/__tests__/" in normalized
-        or normalized.startswith("tests/")
-        or normalized.startswith("test/")
-        or normalized.startswith("__tests__/")
-    )
-
-    test_suffixes = (
-        "_test.py",
-        ".test.py",
-        ".test.js",
-        ".test.ts",
-        ".test.jsx",
-        ".test.tsx",
-        ".spec.js",
-        ".spec.ts",
-        ".spec.jsx",
-        ".spec.tsx",
-    )
-
+    in_test_dir = any(d in _TEST_DIRS for d in parts[:-1])
     has_test_name = (
         basename.startswith("test_")
-        or basename.endswith(test_suffixes)
+        or basename in _TEST_BASENAMES
+        or basename.endswith(_TEST_SUFFIXES)
     )
-
     return in_test_dir or has_test_name
 
 
@@ -118,6 +114,33 @@ def get_changed_files(base_ref: str, cwd: str = ".") -> list[str]:
         pass
 
     return changed
+
+
+def get_renamed_files(base_ref: str, cwd: str = ".") -> dict[str, str]:
+    """Map new path -> old path for files renamed/moved between base_ref and the working tree."""
+    ensure_base_ref(base_ref, cwd=cwd)
+    renames: dict[str, str] = {}
+    try:
+        res = subprocess.run(
+            ["git", "diff", "--name-status", "-M", "-z", base_ref],
+            cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+    except (subprocess.SubprocessError, FileNotFoundError, OSError):
+        return renames
+    if res.returncode != 0:
+        return renames
+    fields = res.stdout.split("\0")
+    i = 0
+    while i < len(fields):
+        status = fields[i]
+        if status.startswith(("R", "C")) and i + 2 < len(fields):
+            old, new = fields[i + 1], fields[i + 2]
+            if status.startswith("R"):
+                renames[new.replace("\\", "/")] = old.replace("\\", "/")
+            i += 3
+        else:
+            i += 2
+    return renames
 
 
 def get_file_content_at_ref(ref: str, file_path: str, cwd: str = ".") -> Optional[str]:
