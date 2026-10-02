@@ -11,6 +11,7 @@ from typing import Optional
 
 from testguard.anti_hardcode import detect_hardcoded_cheats, extract_test_literals
 from testguard.ast_diff import analyze_ast_diff, analyze_test_code
+from testguard.js_hardcode import detect_js_hardcoded_cheats
 from testguard.js_diff import (
     JS_TS_EXTENSIONS,
     analyze_js_test_code,
@@ -46,7 +47,11 @@ def evaluate_changes(
     if config.exclude_patterns:
         changed_files = [f for f in changed_files if not is_file_excluded(f, config.exclude_patterns)]
     test_files = [f for f in changed_files if is_test_file(f)]
-    src_files = [f for f in changed_files if not is_test_file(f) and f.endswith(".py")]
+    src_files = [
+        f for f in changed_files
+        if not is_test_file(f)
+        and (f.endswith(".py") or (f.endswith(JS_TS_EXTENSIONS) and not f.endswith(".d.ts")))
+    ]
 
     collected_literals: set = set()
 
@@ -129,7 +134,10 @@ def evaluate_changes(
             continue
         with open(full_path, "r", encoding="utf-8", errors="ignore") as f:
             src_content = f.read()
-        violations.extend(detect_hardcoded_cheats(src_content, collected_literals, file_path=src_file))
+        if src_file.endswith(".py"):
+            violations.extend(detect_hardcoded_cheats(src_content, collected_literals, file_path=src_file))
+        else:
+            violations.extend(detect_js_hardcoded_cheats(src_content, collected_literals, file_path=src_file))
 
     if config.shadow_run:
         violations.extend(run_shadow_tests(base_ref, cwd=cwd, config=config))

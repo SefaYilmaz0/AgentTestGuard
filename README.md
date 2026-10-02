@@ -60,7 +60,8 @@ TestGuard runs as a zero-dependency **CLI tool** and **GitHub Action** providing
       ┌────────────────────────────────────────────────────────┐
       │  Katman 3: Anti-Hardcode Matcher                       │
       │  - Scans test literals (strings, ints, floats)         │
-      │  - Detects if/match/ternary checks hardcoded in source │
+      │  - Detects if/match/ternary/switch + lookup tables    │
+      │    hardcoded in Python and JS/TS sources              │
       └───────────────────────────┬────────────────────────────┘
                                   │
                   ┌───────────────┴───────────────┐

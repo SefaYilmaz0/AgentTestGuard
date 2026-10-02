@@ -60,7 +60,14 @@ def _is_constant_or_literal(expr: Optional[ast.AST], test_literals: set[Any]) ->
         keys_ok = all(_is_constant_or_literal(k, test_literals) for k in expr.keys if k is not None)
         vals_ok = all(_is_constant_or_literal(v, test_literals) for v in expr.values)
         return keys_ok and vals_ok
-    if isinstance(expr, (ast.Call, ast.Await)):
+    if isinstance(expr, ast.Call):
+        # Wrapper around a test literal, e.g. `return Result("session_xyz")` / `str(42)`.
+        # Calls on non-literal arguments are real logic and stay clean.
+        args = list(expr.args) + [kw.value for kw in expr.keywords]
+        return bool(args) and all(_is_constant_or_literal(a, test_literals) for a in args) and any(
+            _extract_constants_from_expr(a).intersection(test_literals) for a in args
+        )
+    if isinstance(expr, ast.Await):
         return False
     constants = _extract_constants_from_expr(expr)
     if constants.intersection(test_literals):
@@ -167,6 +174,81 @@ class _HardcodeCheatVisitor(ast.NodeVisitor):
                 ))
         self.generic_visit(node)
 
+def _enclosing_function_names(tree: ast.AST) -> dict[ast.AST, str]:
+    names: dict[ast.AST, str] = {}
+
+    def walk(node: ast.AST, current: str) -> None:
+        for child in ast.iter_child_nodes(node):
+            nxt = child.name if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) else current
+            names[child] = nxt
+            walk(child, nxt)
+
+    walk(tree, "<module>")
+    return names
+
+
+def _lookup_table_cheats(tree: ast.AST, test_literals: set[Any], file_path: str) -> list[Violation]:
+    """Detect dict literals that map test literals to constants and are used as a lookup.
+
+    Catches `return {"user_123": "ok"}[user]`, `.get(user)` and
+    `TABLE = {"user_123": "ok"}` later read via `TABLE[user]` / `TABLE.get(user)`.
+    """
+    parents: dict[ast.AST, ast.AST] = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parents[child] = node
+
+    indexed_names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name):
+            indexed_names.add(node.value.id)
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "get"
+            and isinstance(node.func.value, ast.Name)
+        ):
+            indexed_names.add(node.func.value.id)
+
+    func_names = _enclosing_function_names(tree)
+    violations: list[Violation] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Dict) or not node.keys:
+            continue
+        matched = {
+            k.value for k in node.keys
+            if isinstance(k, ast.Constant) and not isinstance(k.value, bool) and k.value in test_literals
+        }
+        if not matched or not all(_is_constant_or_literal(v, test_literals) for v in node.values):
+            continue
+        parent = parents.get(node)
+        used = False
+        if isinstance(parent, ast.Subscript) and parent.value is node:
+            used = True
+        elif isinstance(parent, ast.Attribute) and parent.value is node and parent.attr == "get":
+            used = True
+        elif isinstance(parent, ast.Assign) and parent.value is node:
+            used = any(isinstance(t, ast.Name) and t.id in indexed_names for t in parent.targets)
+        elif isinstance(parent, ast.AnnAssign) and parent.value is node:
+            used = isinstance(parent.target, ast.Name) and parent.target.id in indexed_names
+        if not used:
+            continue
+        matched_sorted = sorted(matched, key=str)
+        func_name = func_names.get(node, "<module>")
+        violations.append(Violation(
+            type=ViolationType.HARDCODED_CHEAT,
+            file_path=file_path,
+            line_number=node.lineno,
+            symbol_name=func_name,
+            message=(
+                f"Hardcoded lookup table keyed by test literal(s) "
+                f"{', '.join(repr(x) for x in matched_sorted)} in '{func_name}'"
+            ),
+            details={"matched_literals": matched_sorted},
+        ))
+    return violations
+
+
 def detect_hardcoded_cheats(src_code: str, test_literals: set[Any], file_path: str = "") -> list[Violation]:
     """Analyze source code AST for hardcoded test literals checked in condition branches that return."""
     if not test_literals:
@@ -179,4 +261,4 @@ def detect_hardcoded_cheats(src_code: str, test_literals: set[Any], file_path: s
 
     visitor = _HardcodeCheatVisitor(test_literals=test_literals, file_path=file_path)
     visitor.visit(tree)
-    return visitor.violations
+    return visitor.violations + _lookup_table_cheats(tree, test_literals, file_path)
