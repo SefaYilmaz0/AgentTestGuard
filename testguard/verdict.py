@@ -11,6 +11,7 @@ from typing import Optional
 
 from testguard.anti_hardcode import detect_hardcoded_cheats, extract_test_literals
 from testguard.ast_diff import analyze_ast_diff, analyze_test_code
+from testguard.js_hardcode import detect_js_hardcoded_cheats
 from testguard.js_diff import (
     JS_TS_EXTENSIONS,
     analyze_js_test_code,
@@ -19,7 +20,19 @@ from testguard.js_diff import (
 )
 from testguard.config import TestGuardConfig, is_file_excluded, load_config
 from testguard.models import Report, Verdict, Violation
-from testguard.shadow import get_changed_files, get_file_content_at_ref, is_test_file
+from testguard.shadow_runner import run_shadow_tests
+from testguard.shadow import get_changed_files, get_file_content_at_ref, get_renamed_files, is_test_file
+
+
+def _mark_file_deleted(violations: list[Violation], file_path: str) -> None:
+    """Make clear the tests vanished because their file is gone, not edited in place."""
+    for v in violations:
+        v.details["file_deleted"] = True
+        if v.message.endswith("was removed entirely"):
+            v.message = (
+                f"{v.message[:-len('was removed entirely')]}was removed: "
+                f"its file '{file_path}' no longer exists (deleted, or moved without a trackable rename)"
+            )
 
 
 def evaluate_changes(
@@ -44,8 +57,17 @@ def evaluate_changes(
     changed_files = get_changed_files(base_ref, cwd=cwd)
     if config.exclude_patterns:
         changed_files = [f for f in changed_files if not is_file_excluded(f, config.exclude_patterns)]
-    test_files = [f for f in changed_files if is_test_file(f)]
-    src_files = [f for f in changed_files if not is_test_file(f) and f.endswith(".py")]
+    renames = get_renamed_files(base_ref, cwd=cwd)
+    # A test moved to a non-test-looking path is still a test (compared against its old content).
+    def _is_test(f: str) -> bool:
+        return is_test_file(f) or (f in renames and is_test_file(renames[f]))
+
+    test_files = [f for f in changed_files if _is_test(f)]
+    src_files = [
+        f for f in changed_files
+        if not _is_test(f)
+        and (f.endswith(".py") or (f.endswith(JS_TS_EXTENSIONS) and not f.endswith(".d.ts")))
+    ]
 
     collected_literals: set = set()
 
@@ -57,18 +79,22 @@ def evaluate_changes(
 
         full_path = os.path.join(cwd, test_file)
         if not os.path.exists(full_path):
-            base_content = get_file_content_at_ref(base_ref, test_file, cwd=cwd)
+            base_content = get_file_content_at_ref(base_ref, renames.get(test_file, test_file), cwd=cwd)
             if base_content is not None:
                 if is_py:
-                    violations.extend(analyze_ast_diff(base_content, "", file_path=test_file))
+                    deleted = analyze_ast_diff(base_content, "", file_path=test_file)
+                    _mark_file_deleted(deleted, test_file)
+                    violations.extend(deleted)
                 elif is_js:
-                    violations.extend(analyze_js_test_diff(base_content, "", file_path=test_file))
+                    deleted = analyze_js_test_diff(base_content, "", file_path=test_file)
+                    _mark_file_deleted(deleted, test_file)
+                    violations.extend(deleted)
             continue
 
         with open(full_path, "r", encoding="utf-8", errors="ignore") as f:
             head_content = f.read()
 
-        base_content = get_file_content_at_ref(base_ref, test_file, cwd=cwd)
+        base_content = get_file_content_at_ref(base_ref, renames.get(test_file, test_file), cwd=cwd)
 
         if is_py:
             collected_literals.update(extract_test_literals(head_content))
@@ -128,7 +154,13 @@ def evaluate_changes(
             continue
         with open(full_path, "r", encoding="utf-8", errors="ignore") as f:
             src_content = f.read()
-        violations.extend(detect_hardcoded_cheats(src_content, collected_literals, file_path=src_file))
+        if src_file.endswith(".py"):
+            violations.extend(detect_hardcoded_cheats(src_content, collected_literals, file_path=src_file))
+        else:
+            violations.extend(detect_js_hardcoded_cheats(src_content, collected_literals, file_path=src_file))
+
+    if config.shadow_run:
+        violations.extend(run_shadow_tests(base_ref, cwd=cwd, config=config))
 
     elapsed_ms = (time.perf_counter() - start_time) * 1000.0
     verdict = Verdict.VETO if violations else Verdict.PASS

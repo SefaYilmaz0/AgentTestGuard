@@ -40,14 +40,47 @@ def extract_test_literals(test_code: str) -> set[Any]:
                 literals.add(val)
     return literals
 
-def _extract_constants_from_expr(expr: ast.AST) -> set[Any]:
+def _collect_constant_aliases(tree: ast.AST) -> dict[str, Any]:
+    """Names assigned exactly once, to a str/number constant (`SECRET = "user_123"`)."""
+    counts: dict[str, int] = {}
+    values: dict[str, Any] = {}
+    for node in ast.walk(tree):
+        targets: list[ast.AST] = []
+        value = None
+        if isinstance(node, ast.Assign):
+            targets, value = list(node.targets), node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets, value = [node.target], node.value
+        elif isinstance(node, (ast.AugAssign, ast.NamedExpr)):
+            targets = [node.target]
+        else:
+            continue
+        for t in targets:
+            for n in ast.walk(t):
+                if isinstance(n, ast.Name):
+                    counts[n.id] = counts.get(n.id, 0) + 1
+                    if (
+                        isinstance(t, ast.Name)
+                        and isinstance(value, ast.Constant)
+                        and isinstance(value.value, (str, int, float))
+                        and not isinstance(value.value, bool)
+                    ):
+                        values[n.id] = value.value
+    return {n: v for n, v in values.items() if counts.get(n) == 1}
+
+
+def _extract_constants_from_expr(expr: ast.AST, consts: Optional[dict[str, Any]] = None) -> set[Any]:
     constants: set[Any] = set()
     for child in ast.walk(expr):
         if isinstance(child, ast.Constant) and not isinstance(child.value, bool):
             constants.add(child.value)
+        elif consts and isinstance(child, ast.Name) and child.id in consts:
+            constants.add(consts[child.id])
     return constants
 
-def _is_constant_or_literal(expr: Optional[ast.AST], test_literals: set[Any]) -> bool:
+def _is_constant_or_literal(
+    expr: Optional[ast.AST], test_literals: set[Any], consts: Optional[dict[str, Any]] = None
+) -> bool:
     if expr is None:
         return True
     if isinstance(expr, ast.Constant):
@@ -55,30 +88,41 @@ def _is_constant_or_literal(expr: Optional[ast.AST], test_literals: set[Any]) ->
     if isinstance(expr, ast.UnaryOp) and isinstance(expr.operand, ast.Constant):
         return True
     if isinstance(expr, (ast.List, ast.Tuple, ast.Set)):
-        return all(_is_constant_or_literal(elt, test_literals) for elt in expr.elts)
+        return all(_is_constant_or_literal(elt, test_literals, consts) for elt in expr.elts)
     if isinstance(expr, ast.Dict):
-        keys_ok = all(_is_constant_or_literal(k, test_literals) for k in expr.keys if k is not None)
-        vals_ok = all(_is_constant_or_literal(v, test_literals) for v in expr.values)
+        keys_ok = all(_is_constant_or_literal(k, test_literals, consts) for k in expr.keys if k is not None)
+        vals_ok = all(_is_constant_or_literal(v, test_literals, consts) for v in expr.values)
         return keys_ok and vals_ok
-    if isinstance(expr, (ast.Call, ast.Await)):
+    if isinstance(expr, ast.Call):
+        # Wrapper around a test literal, e.g. `return Result("session_xyz")` / `str(42)`.
+        # Calls on non-literal arguments are real logic and stay clean.
+        args = list(expr.args) + [kw.value for kw in expr.keywords]
+        return bool(args) and all(_is_constant_or_literal(a, test_literals, consts) for a in args) and any(
+            _extract_constants_from_expr(a, consts).intersection(test_literals) for a in args
+        )
+    if isinstance(expr, ast.Await):
         return False
-    constants = _extract_constants_from_expr(expr)
+    if isinstance(expr, ast.Name) and consts and expr.id in consts:
+        return True  # returning a constant-valued alias
+    constants = _extract_constants_from_expr(expr, consts)
     if constants.intersection(test_literals):
         return True
     return False
 
-def _has_hardcoded_return_in_body(body: list[ast.stmt], test_literals: set[Any]) -> bool:
+def _has_hardcoded_return_in_body(
+    body: list[ast.stmt], test_literals: set[Any], consts: Optional[dict[str, Any]] = None
+) -> bool:
     for stmt in body:
         if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         if isinstance(stmt, ast.Return):
-            if _is_constant_or_literal(stmt.value, test_literals):
+            if _is_constant_or_literal(stmt.value, test_literals, consts):
                 return True
         queue = [stmt]
         while queue:
             curr = queue.pop(0)
             if isinstance(curr, ast.Return):
-                if _is_constant_or_literal(curr.value, test_literals):
+                if _is_constant_or_literal(curr.value, test_literals, consts):
                     return True
             for child in ast.iter_child_nodes(curr):
                 if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -86,8 +130,9 @@ def _has_hardcoded_return_in_body(body: list[ast.stmt], test_literals: set[Any])
     return False
 
 class _HardcodeCheatVisitor(ast.NodeVisitor):
-    def __init__(self, test_literals: set[Any], file_path: str):
+    def __init__(self, test_literals: set[Any], file_path: str, consts: Optional[dict[str, Any]] = None):
         self.test_literals = test_literals
+        self.consts = consts or {}
         self.file_path = file_path
         self.current_function: Optional[str] = None
         self.violations: list[Violation] = []
@@ -105,9 +150,9 @@ class _HardcodeCheatVisitor(ast.NodeVisitor):
         self.current_function = prev
 
     def visit_If(self, node: ast.If):
-        cond_constants = _extract_constants_from_expr(node.test)
+        cond_constants = _extract_constants_from_expr(node.test, self.consts)
         matched_literals = cond_constants.intersection(self.test_literals)
-        if matched_literals and _has_hardcoded_return_in_body(node.body, self.test_literals):
+        if matched_literals and _has_hardcoded_return_in_body(node.body, self.test_literals, self.consts):
             matched_sorted = sorted(list(matched_literals), key=str)
             matched_str = ", ".join(repr(x) for x in matched_sorted)
             func_name = self.current_function or "<module>"
@@ -122,11 +167,11 @@ class _HardcodeCheatVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_IfExp(self, node: ast.IfExp):
-        cond_constants = _extract_constants_from_expr(node.test)
+        cond_constants = _extract_constants_from_expr(node.test, self.consts)
         matched_literals = cond_constants.intersection(self.test_literals)
         if matched_literals and (
-            _is_constant_or_literal(node.body, self.test_literals)
-            or _is_constant_or_literal(node.orelse, self.test_literals)
+            _is_constant_or_literal(node.body, self.test_literals, self.consts)
+            or _is_constant_or_literal(node.orelse, self.test_literals, self.consts)
         ):
             matched_sorted = sorted(list(matched_literals), key=str)
             matched_str = ", ".join(repr(x) for x in matched_sorted)
@@ -152,7 +197,7 @@ class _HardcodeCheatVisitor(ast.NodeVisitor):
                     if isinstance(child, ast.Constant) and not isinstance(child.value, bool):
                         pattern_constants.add(child.value)
             matched_literals = pattern_constants.intersection(self.test_literals)
-            if matched_literals and _has_hardcoded_return_in_body(case.body, self.test_literals):
+            if matched_literals and _has_hardcoded_return_in_body(case.body, self.test_literals, self.consts):
                 matched_sorted = sorted(list(matched_literals), key=str)
                 matched_str = ", ".join(repr(x) for x in matched_sorted)
                 func_name = self.current_function or "<module>"
@@ -167,6 +212,81 @@ class _HardcodeCheatVisitor(ast.NodeVisitor):
                 ))
         self.generic_visit(node)
 
+def _enclosing_function_names(tree: ast.AST) -> dict[ast.AST, str]:
+    names: dict[ast.AST, str] = {}
+
+    def walk(node: ast.AST, current: str) -> None:
+        for child in ast.iter_child_nodes(node):
+            nxt = child.name if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) else current
+            names[child] = nxt
+            walk(child, nxt)
+
+    walk(tree, "<module>")
+    return names
+
+
+def _lookup_table_cheats(tree: ast.AST, test_literals: set[Any], file_path: str) -> list[Violation]:
+    """Detect dict literals that map test literals to constants and are used as a lookup.
+
+    Catches `return {"user_123": "ok"}[user]`, `.get(user)` and
+    `TABLE = {"user_123": "ok"}` later read via `TABLE[user]` / `TABLE.get(user)`.
+    """
+    parents: dict[ast.AST, ast.AST] = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parents[child] = node
+
+    indexed_names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name):
+            indexed_names.add(node.value.id)
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "get"
+            and isinstance(node.func.value, ast.Name)
+        ):
+            indexed_names.add(node.func.value.id)
+
+    func_names = _enclosing_function_names(tree)
+    violations: list[Violation] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Dict) or not node.keys:
+            continue
+        matched = {
+            k.value for k in node.keys
+            if isinstance(k, ast.Constant) and not isinstance(k.value, bool) and k.value in test_literals
+        }
+        if not matched or not all(_is_constant_or_literal(v, test_literals) for v in node.values):
+            continue
+        parent = parents.get(node)
+        used = False
+        if isinstance(parent, ast.Subscript) and parent.value is node:
+            used = True
+        elif isinstance(parent, ast.Attribute) and parent.value is node and parent.attr == "get":
+            used = True
+        elif isinstance(parent, ast.Assign) and parent.value is node:
+            used = any(isinstance(t, ast.Name) and t.id in indexed_names for t in parent.targets)
+        elif isinstance(parent, ast.AnnAssign) and parent.value is node:
+            used = isinstance(parent.target, ast.Name) and parent.target.id in indexed_names
+        if not used:
+            continue
+        matched_sorted = sorted(matched, key=str)
+        func_name = func_names.get(node, "<module>")
+        violations.append(Violation(
+            type=ViolationType.HARDCODED_CHEAT,
+            file_path=file_path,
+            line_number=node.lineno,
+            symbol_name=func_name,
+            message=(
+                f"Hardcoded lookup table keyed by test literal(s) "
+                f"{', '.join(repr(x) for x in matched_sorted)} in '{func_name}'"
+            ),
+            details={"matched_literals": matched_sorted},
+        ))
+    return violations
+
+
 def detect_hardcoded_cheats(src_code: str, test_literals: set[Any], file_path: str = "") -> list[Violation]:
     """Analyze source code AST for hardcoded test literals checked in condition branches that return."""
     if not test_literals:
@@ -177,6 +297,8 @@ def detect_hardcoded_cheats(src_code: str, test_literals: set[Any], file_path: s
     except SyntaxError:
         return []
 
-    visitor = _HardcodeCheatVisitor(test_literals=test_literals, file_path=file_path)
+    visitor = _HardcodeCheatVisitor(
+        test_literals=test_literals, file_path=file_path, consts=_collect_constant_aliases(tree)
+    )
     visitor.visit(tree)
-    return visitor.violations
+    return visitor.violations + _lookup_table_cheats(tree, test_literals, file_path)

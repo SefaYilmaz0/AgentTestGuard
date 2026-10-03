@@ -185,3 +185,49 @@ def route_ternary(path, user):
 if __name__ == "__main__":
     unittest.main()
 
+
+
+class TestAntiHardcodeBypasses(unittest.TestCase):
+    LITS = {"user_123", "session_xyz"}
+
+    def test_call_wrapped_return(self):
+        src = 'def f(u):\n    if u == "user_123":\n        return Session("session_xyz")\n    return real(u)\n'
+        self.assertEqual(len(detect_hardcoded_cheats(src, self.LITS, "a.py")), 1)
+
+    def test_call_on_real_args_is_clean(self):
+        src = 'def f(u):\n    if u == "user_123":\n        return real(u)\n    return 0\n'
+        self.assertEqual(detect_hardcoded_cheats(src, self.LITS, "a.py"), [])
+
+    def test_inline_dict_lookup(self):
+        src = 'def f(u):\n    return {"user_123": "session_xyz"}[u]\n'
+        v = detect_hardcoded_cheats(src, self.LITS, "a.py")
+        self.assertEqual(len(v), 1)
+        self.assertEqual(v[0].symbol_name, "f")
+        src = 'def f(u):\n    return {"user_123": "session_xyz"}.get(u)\n'
+        self.assertEqual(len(detect_hardcoded_cheats(src, self.LITS, "a.py")), 1)
+
+    def test_module_level_table_lookup(self):
+        src = 'TABLE = {"user_123": "session_xyz"}\ndef f(u):\n    return TABLE.get(u)\n'
+        v = detect_hardcoded_cheats(src, self.LITS, "a.py")
+        self.assertEqual(len(v), 1)
+        self.assertEqual(v[0].symbol_name, "<module>")
+
+    def test_unused_or_non_matching_dict_is_clean(self):
+        self.assertEqual(detect_hardcoded_cheats('CFG = {"user_123": "x"}\ndef f():\n    return CFG\n', self.LITS, "a.py"), [])
+        self.assertEqual(detect_hardcoded_cheats('def f(u):\n    return {"other_key": "x"}[u]\n', self.LITS, "a.py"), [])
+
+
+class TestAntiHardcodeAliases(unittest.TestCase):
+    LITS = {"user_123", "session_xyz"}
+
+    def test_constant_alias_in_condition(self):
+        src = 'SECRET = "user_123"\ndef f(u):\n    if u == SECRET:\n        return "session_xyz"\n    return real(u)\n'
+        self.assertEqual(len(detect_hardcoded_cheats(src, self.LITS, "a.py")), 1)
+
+    def test_return_alias(self):
+        src = 'TOKEN = "abcdef"\ndef f(u):\n    if u == "user_123":\n        return TOKEN\n    return real(u)\n'
+        self.assertEqual(len(detect_hardcoded_cheats(src, self.LITS, "a.py")), 1)
+
+    def test_reassigned_name_is_not_alias(self):
+        src = 'SECRET = "user_123"\nSECRET = load()\ndef f(u):\n    if u == SECRET:\n        return "session_xyz"\n    return real(u)\n'
+        self.assertEqual(detect_hardcoded_cheats(src, self.LITS, "a.py"), [])

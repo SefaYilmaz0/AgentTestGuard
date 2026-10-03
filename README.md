@@ -60,7 +60,8 @@ TestGuard runs as a zero-dependency **CLI tool** and **GitHub Action** providing
       ┌────────────────────────────────────────────────────────┐
       │  Katman 3: Anti-Hardcode Matcher                       │
       │  - Scans test literals (strings, ints, floats)         │
-      │  - Detects if/match/ternary checks hardcoded in source │
+      │  - Detects if/match/ternary/switch + lookup tables    │
+      │    hardcoded in Python and JS/TS sources              │
       └───────────────────────────┬────────────────────────────┘
                                   │
                   ┌───────────────┴───────────────┐
@@ -154,9 +155,22 @@ testguard check --base origin/main --format markdown
 testguard check --base origin/main --format json
 ```
 
+### 5. Shadow Test Runner (`--shadow-run`)
+
+Static analysis catches *edited* tests; the shadow run catches *broken code*. TestGuard copies the working tree into a temp directory, restores **every test file from the base ref** (undoing edits and deletions), and runs them against your modified sources. Your working tree is never touched.
+
+```bash
+testguard check --base origin/main --shadow-run
+```
+
+- Default command: `python -m pytest -q <base test files>`. For other stacks set `shadow_command` (use `{files}` to receive the base test files), e.g. `"shadow_command": "npx vitest run"`.
+- Config keys (`.testguard.json` / `[tool.testguard]`): `shadow_run` (bool, always on), `shadow_command`, `shadow_timeout` (seconds, default 300).
+- Failures surface as `SHADOW_TEST_FAILED`. It is opt-in because it executes your test suite (needs dependencies installed). In the Action, set `shadow-run: "true"`.
+
 ### Exit Codes
 - `0`: **PASS** — Clean PR, no cheating patterns detected.
 - `1`: **VETO** — Goal gaming detected, CI / commit / hook blocked.
+- `2`: **ERROR** — Base ref could not be resolved (fail closed; never a silent PASS).
 
 ---
 

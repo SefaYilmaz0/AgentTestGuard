@@ -10,6 +10,7 @@ import sys
 from typing import Optional
 
 from testguard.config import load_config
+from testguard.shadow import BaseRefError
 from testguard.installer import install_claude_hook, install_git_hook
 from testguard.verdict import evaluate_changes, format_markdown_report
 
@@ -44,6 +45,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     common.add_argument("--cwd", default=".", help="Directory to run check in")
     common.add_argument(
         "--config", default=None, help="Path to configuration file (.testguard.json or pyproject.toml)"
+    )
+
+    common.add_argument(
+        "--shadow-run",
+        action="store_true",
+        help="Also run the base branch's tests against the modified sources (Shadow Test Runner)",
     )
 
     parser = argparse.ArgumentParser(
@@ -101,7 +108,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 0 if success else 1
 
     config = load_config(cwd=args.cwd, config_path=args.config)
-    report = evaluate_changes(base_ref=args.base, cwd=args.cwd, config=config)
+    if args.shadow_run:
+        config.shadow_run = True
+    try:
+        report = evaluate_changes(base_ref=args.base, cwd=args.cwd, config=config)
+    except BaseRefError as exc:
+        print(f"TestGuard error: {exc}", file=sys.stderr)
+        return 2
 
     if args.format == "json":
         _safe_print(json.dumps(report.to_dict(), indent=2, ensure_ascii=False))
@@ -118,6 +131,10 @@ def main(argv: Optional[list[str]] = None) -> int:
             for v in report.violations:
                 loc = f"{v.file_path}:{v.line_number}" if v.line_number else v.file_path
                 _safe_print(f"   - [{v.type.value}] {loc}: {v.message}")
+                tail = v.details.get("output_tail")
+                if tail:
+                    for line in tail.splitlines()[-15:]:
+                        _safe_print(f"       | {line}")
 
     return 0 if report.is_passed else 1
 

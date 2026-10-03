@@ -21,7 +21,7 @@ IGNORED_LITERALS: set[Any] = {
 }
 
 JS_TS_EXTENSIONS = (
-    ".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs",
+    ".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs", ".mts", ".cts",
 )
 
 SKIP_KEYWORDS = {"it", "test", "describe", "context", "suite"}
