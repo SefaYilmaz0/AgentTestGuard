@@ -65,6 +65,9 @@ def _copy_workspace(src: str, dst: str) -> None:
 def _build_command(config: TestGuardConfig, py_files: list[str], other_files: list[str]) -> Optional[list[str]]:
     if config.shadow_command:
         cmd = shlex.split(config.shadow_command, posix=(os.name != "nt"))
+        if os.name == "nt":
+            # non-POSIX shlex keeps the surrounding quotes; strip them like a shell would
+            cmd = [t[1:-1] if len(t) >= 2 and t[0] == t[-1] and t[0] in "\"'" else t for t in cmd]
         if "{files}" in cmd:
             i = cmd.index("{files}")
             return cmd[:i] + py_files + other_files + cmd[i + 1:]

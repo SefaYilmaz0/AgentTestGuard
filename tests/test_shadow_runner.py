@@ -1,6 +1,7 @@
 import os
 import subprocess
 import tempfile
+import importlib.util
 import unittest
 
 from testguard.cli import main
@@ -21,6 +22,10 @@ def _write(cwd, rel, content):
         f.write(content)
 
 
+HAS_PYTEST = importlib.util.find_spec("pytest") is not None
+
+
+@unittest.skipUnless(HAS_PYTEST, "default shadow command needs pytest")
 class TestShadowRunner(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
